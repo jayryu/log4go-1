@@ -12,6 +12,7 @@ import (
 type FileLogWriter struct {
 	rec chan *LogRecord
 	rot chan bool
+	completed chan int
 
 	// The opened file
 	filename string
@@ -46,6 +47,7 @@ func (w *FileLogWriter) LogWrite(rec *LogRecord) {
 
 func (w *FileLogWriter) Close() {
 	close(w.rec)
+	<- w.completed
 }
 
 // NewFileLogWriter creates a new LogWriter which writes to the given file and
@@ -61,6 +63,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	w := &FileLogWriter{
 		rec:      make(chan *LogRecord, LogBufferLength),
 		rot:      make(chan bool),
+		completed: make(chan int),
 		filename: fname,
 		format:   "[%D %T] [%L] (%S) %M",
 		rotate:   rotate,
@@ -89,6 +92,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				}
 			case rec, ok := <-w.rec:
 				if !ok {
+					close(w.completed)
 					return
 				}
 				now := time.Now()
