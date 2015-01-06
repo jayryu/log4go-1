@@ -70,8 +70,8 @@ type level int
 const (
 	FINEST level = iota
 	FINE
-	DEBUG
 	TRACE
+	DEBUG
 	INFO
 	WARNING
 	ERROR
@@ -80,7 +80,7 @@ const (
 
 // Logging level strings
 var (
-	levelStrings = [...]string{"FNST", "FINE", "DEBG", "TRAC", "INFO", "WARN", "EROR", "CRIT"}
+	levelStrings = [...]string{"FNST", "FINE", "TRAC", "DEBG", "INFO", "WARN", "EROR", "CRIT"}
 )
 
 func (l level) String() string {
