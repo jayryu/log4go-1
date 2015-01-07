@@ -220,7 +220,7 @@ func TestLogger(t *testing.T) {
 
 func TestLogOutput(t *testing.T) {
 	const (
-		expected = "fdf3e51e444da56b4cb400f30bc47424"
+		expected = "da59cbdd5a2cabbf550676cfb2913138"
 	)
 
 	// Unbuffered output
