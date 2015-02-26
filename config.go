@@ -103,6 +103,10 @@ func (log Logger) LoadConfiguration(filename string) {
 			os.Exit(1)
 		}
 
+                for i := range xmlfilt.Property {
+			xmlfilt.Property[i].Value = os.ExpandEnv(xmlfilt.Property[i].Value)
+		}
+
 		switch xmlfilt.Type {
 		case "console":
 			filt, good = xmlToConsoleLogWriter(filename, xmlfilt.Property, enabled)
@@ -115,10 +119,6 @@ func (log Logger) LoadConfiguration(filename string) {
 		default:
 			fmt.Fprintf(os.Stderr, "LoadConfiguration: Error: Could not load XML configuration in %s: unknown filter type \"%s\"\n", filename, xmlfilt.Type)
 			os.Exit(1)
-		}
-
-		for i := range xmlfilt.Property {
-			xmlfilt.Property[i].Value = os.ExpandEnv(xmlfilt.Property[i].Value)
 		} 
 
 		// Just so all of the required params are errored at the same time if wrong

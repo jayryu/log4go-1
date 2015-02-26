@@ -421,6 +421,49 @@ func TestXMLConfig(t *testing.T) {
 	os.Rename(configfile, "examples/"+configfile) // Keep this so that an example with the documentation is available
 }
 
+func TestExpandEnvironmentVariables(t *testing.T) {
+        const (
+		configfile = "example.xml"
+		logVar = "variable"
+	)
+
+        os.Setenv("log.location", logVar)
+ 
+	fd, err := os.Create(configfile)
+	if err != nil {
+		t.Fatalf("Could not open %s for writing: %s", configfile, err)
+	}
+
+	fmt.Fprintln(fd, "<logging>")
+	fmt.Fprintln(fd, "  <filter enabled=\"true\">")
+	fmt.Fprintln(fd, "    <tag>file</tag>")
+	fmt.Fprintln(fd, "    <type>file</type>")
+	fmt.Fprintln(fd, "    <level>FINEST</level>")
+	fmt.Fprintln(fd, "    <property name=\"filename\">${log.location}-test</property>")
+	fmt.Fprintln(fd, "  </filter>")
+	fmt.Fprintln(fd, "</logging>")
+	fd.Close()
+
+	log := make(Logger)
+	log.LoadConfiguration(configfile)
+	defer os.Remove(logVar+"-test")
+	defer log.Close()
+
+	// Make sure we got all loggers
+	if len(log) != 1 {
+		t.Fatalf("XMLConfig: Expected 3 filters, found %d", len(log))
+	}
+	if _, ok := log["file"]; !ok {
+		t.Fatalf("XMLConfig: Expected file logger")
+	}
+	 
+        // Make sure the w points to the right file
+	if fname := log["file"].LogWriter.(*FileLogWriter).file.Name(); fname != logVar+"-test" {
+		t.Errorf("XMLConfig: Expected file to have opened %s, found %s", logVar+"-test", fname)
+	}
+
+}
+
 func BenchmarkFormatLogRecord(b *testing.B) {
 	const updateEvery = 1
 	rec := &LogRecord{
