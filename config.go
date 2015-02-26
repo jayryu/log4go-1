@@ -136,6 +136,8 @@ func (log Logger) LoadConfiguration(filename string) {
 	}
 }
 
+/* Replace all instances of `${var}` in the string with the value of the environment variable `var`.
+   The literal `$` must be escaped with a backspace - for example, `\${}` becomes `${}`. */
 func substituteEnv(prop string) string {
 	vStart := 0
 	state := 1
@@ -147,6 +149,12 @@ func substituteEnv(prop string) string {
 			propBuilder.WriteString(prop[lastOffset:i-1])
 			propBuilder.WriteString("$")
 			lastOffset = i+1
+			state = 1
+                case state == 0 && prop[i] == '\\':
+			propBuilder.WriteString(prop[lastOffset:i-1])
+			propBuilder.WriteString("\\")
+			lastOffset = i+1
+			state = 1
 		case state == 1 && prop[i] == '$':
 			state = 2
 		case state == 1 && prop[i] == '\\':
