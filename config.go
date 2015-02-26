@@ -136,8 +136,13 @@ func (log Logger) LoadConfiguration(filename string) {
 	}
 }
 
-/* Replace all instances of `${var}` in the string with the value of the environment variable `var`.
-   The literal `$` must be escaped with a backspace - for example, `\${}` becomes `${}`. */
+/* 
+   Replace all instances of `${var}` in the string with the value of the environment variable `var`.
+   The literals `$` and `\` may be escaped with a backspace. Examples:
+     `${var}` becomes `<value of var>`
+     `\${var}` becomes `${var}`,
+     `\\${var}` becomes `\<value of var>`
+*/
 func substituteEnv(prop string) string {
 	vStart := 0
 	state := 1
