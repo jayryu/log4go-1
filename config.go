@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"bytes"
 )
 
 type xmlProperty struct {
@@ -104,7 +105,7 @@ func (log Logger) LoadConfiguration(filename string) {
 		}
 
                 for i := range xmlfilt.Property {
-			xmlfilt.Property[i].Value = os.ExpandEnv(xmlfilt.Property[i].Value)
+			xmlfilt.Property[i].Value = substituteEnv(xmlfilt.Property[i].Value)
 		}
 
 		switch xmlfilt.Type {
@@ -133,6 +134,40 @@ func (log Logger) LoadConfiguration(filename string) {
 
 		log[xmlfilt.Tag] = &Filter{lvl, filt}
 	}
+}
+
+func substituteEnv(prop string) string {
+	vStart := 0
+	state := 1
+	lastOffset := 0
+	var propBuilder bytes.Buffer
+	for i := 0; i < len(prop); i++ {
+		switch {
+		case state == 0 && prop[i] == '$':
+			propBuilder.WriteString(prop[lastOffset:i-1])
+			propBuilder.WriteString("$")
+			lastOffset = i+1
+		case state == 1 && prop[i] == '$':
+			state = 2
+		case state == 1 && prop[i] == '\\':
+			state = 0
+		case state == 2 && prop[i] == '{':
+			vStart = i+1
+			state = 3
+		case state == 3 && prop[i] == '}':
+			value := os.Getenv(prop[vStart:i])
+			propBuilder.WriteString(prop[lastOffset:vStart-2])
+			propBuilder.WriteString(value)
+			lastOffset = i+1
+			state = 1
+		case state != 3:
+			state = 1
+		}
+	}
+	if lastOffset < len(prop) {
+		propBuilder.WriteString(prop[lastOffset:])
+	}
+	return propBuilder.String()
 }
 
 func xmlToConsoleLogWriter(filename string, props []xmlProperty, enabled bool) (ConsoleLogWriter, bool) {
