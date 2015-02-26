@@ -117,6 +117,10 @@ func (log Logger) LoadConfiguration(filename string) {
 			os.Exit(1)
 		}
 
+		for i := range xmlfilt.Property {
+			xmlfilt.Property[i].Value = os.ExpandEnv(xmlfilt.Property[i].Value)
+		} 
+
 		// Just so all of the required params are errored at the same time if wrong
 		if !good {
 			os.Exit(1)
