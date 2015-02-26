@@ -6,6 +6,7 @@ import (
 	"os"
 	"fmt"
 	"time"
+	"path"
 )
 
 // This log writer sends output to a file
@@ -67,6 +68,14 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		filename: fname,
 		format:   "[%D %T] [%L] (%S) %M",
 		rotate:   rotate,
+	}
+
+	// If the directory doesn't exist, attempt to create it
+	logDir := path.Dir(fname)
+	err := os.MkdirAll(logDir, os.ModeDir | os.ModePerm)	
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+		return nil
 	}
 
 	// open the file for the first time

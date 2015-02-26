@@ -421,6 +421,39 @@ func TestXMLConfig(t *testing.T) {
 	os.Rename(configfile, "examples/"+configfile) // Keep this so that an example with the documentation is available
 }
 
+func TestXMLMissingDir(t *testing.T) {
+	const (
+		configfile = "example.xml"
+	)
+
+	fd, err := os.Create(configfile)
+	if err != nil {
+		t.Fatalf("Could not open %s for writing: %s", configfile, err)
+	}
+
+	fmt.Fprintln(fd, "<logging>")
+	fmt.Fprintln(fd, "  <filter enabled=\"true\">")
+	fmt.Fprintln(fd, "    <tag>file</tag>")
+	fmt.Fprintln(fd, "    <type>file</type>")
+	fmt.Fprintln(fd, "    <level>FINEST</level>")
+	fmt.Fprintln(fd, "    <property name=\"filename\">test/test.log</property>")
+	fmt.Fprintln(fd, "    <property name=\"format\">[%D %T] [%L] (%S) %M</property>")
+	fmt.Fprintln(fd, "    <property name=\"rotate\">false</property> <!-- true enables log rotation, otherwise append -->")
+	fmt.Fprintln(fd, "    <property name=\"maxsize\">0M</property> <!-- \\d+[KMG]? Suffixes are in terms of 2**10 -->")
+	fmt.Fprintln(fd, "    <property name=\"maxlines\">0K</property> <!-- \\d+[KMG]? Suffixes are in terms of thousands -->")
+	fmt.Fprintln(fd, "    <property name=\"daily\">true</property> <!-- Automatically rotates when a log message is written after midnight -->")
+	fmt.Fprintln(fd, "  </filter>")
+	fmt.Fprintln(fd, "</logging>")
+	fd.Close()
+
+	log := make(Logger)
+	log.LoadConfiguration(configfile)
+	defer os.Remove("trace.xml")
+	defer os.RemoveAll("test")
+	defer log.Close()
+
+}
+
 func BenchmarkFormatLogRecord(b *testing.B) {
 	const updateEvery = 1
 	rec := &LogRecord{
