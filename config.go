@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"bytes"
 )
 
 type xmlProperty struct {
@@ -103,6 +104,10 @@ func (log Logger) LoadConfiguration(filename string) {
 			os.Exit(1)
 		}
 
+                for i := range xmlfilt.Property {
+			xmlfilt.Property[i].Value = substituteEnv(xmlfilt.Property[i].Value)
+		}
+
 		switch xmlfilt.Type {
 		case "console":
 			filt, good = xmlToConsoleLogWriter(filename, xmlfilt.Property, enabled)
@@ -129,6 +134,60 @@ func (log Logger) LoadConfiguration(filename string) {
 
 		log[xmlfilt.Tag] = &Filter{lvl, filt}
 	}
+}
+
+/*
+   Replace all instances of `${var}` in the string with the value of the environment variable `var`.
+   The literals `$` and `\` may be escaped with a backslash. Examples:
+     `${var}` becomes `<value of var>`
+     `\${var}` becomes `${var}`,
+     `\\${var}` becomes `\<value of var>`
+*/
+
+func substituteEnv(prop string) string {
+	vStart := 0
+	lastOffset := 0
+	var propBuilder bytes.Buffer
+	state := 1
+        /* States:
+	   0 - Previous character was `\`, the next character may be an escaped `$` or `\`
+	   1 - Initial state
+	   2 - Previous character was `$`, the next character may be `{`
+	   3 - Previous characters were `${`, continue until the next character is `}`
+        */
+	for i := 0; i < len(prop); i++ {
+		switch {
+		case state == 0 && prop[i] == '$':
+			propBuilder.WriteString(prop[lastOffset:i-1])
+			propBuilder.WriteString("$")
+			lastOffset = i+1
+			state = 1
+                case state == 0 && prop[i] == '\\':
+			propBuilder.WriteString(prop[lastOffset:i-1])
+			propBuilder.WriteString("\\")
+			lastOffset = i+1
+			state = 1
+		case state == 1 && prop[i] == '$':
+			state = 2
+		case state == 1 && prop[i] == '\\':
+			state = 0
+		case state == 2 && prop[i] == '{':
+			vStart = i+1
+			state = 3
+		case state == 3 && prop[i] == '}':
+			value := os.Getenv(prop[vStart:i])
+			propBuilder.WriteString(prop[lastOffset:vStart-2])
+			propBuilder.WriteString(value)
+			lastOffset = i+1
+			state = 1
+		case state != 3:
+			state = 1
+		}
+	}
+	if lastOffset < len(prop) {
+		propBuilder.WriteString(prop[lastOffset:])
+	}
+	return propBuilder.String()
 }
 
 func xmlToConsoleLogWriter(filename string, props []xmlProperty, enabled bool) (ConsoleLogWriter, bool) {

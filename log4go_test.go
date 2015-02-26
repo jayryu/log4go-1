@@ -421,6 +421,123 @@ func TestXMLConfig(t *testing.T) {
 	os.Rename(configfile, "examples/"+configfile) // Keep this so that an example with the documentation is available
 }
 
+func TestExpandEnvironmentVariables(t *testing.T) {
+        const (
+		configfile = "example.xml"
+		logVar = "variable"
+	)
+
+        os.Setenv("log.location", logVar)
+
+	fd, err := os.Create(configfile)
+	if err != nil {
+		t.Fatalf("Could not open %s for writing: %s", configfile, err)
+	}
+
+	fmt.Fprintln(fd, "<logging>")
+	fmt.Fprintln(fd, "  <filter enabled=\"true\">")
+	fmt.Fprintln(fd, "    <tag>file</tag>")
+	fmt.Fprintln(fd, "    <type>file</type>")
+	fmt.Fprintln(fd, "    <level>FINEST</level>")
+	fmt.Fprintln(fd, "    <property name=\"filename\">${log.location}-test</property>")
+	fmt.Fprintln(fd, "  </filter>")
+	fmt.Fprintln(fd, "</logging>")
+	fd.Close()
+
+	log := make(Logger)
+	log.LoadConfiguration(configfile)
+	defer os.Remove(logVar+"-test")
+	defer log.Close()
+
+	// Make sure we got all loggers
+	if len(log) != 1 {
+		t.Fatalf("XMLConfig: Expected 1 filters, found %d", len(log))
+	}
+	if _, ok := log["file"]; !ok {
+		t.Fatalf("XMLConfig: Expected file logger")
+	}
+
+        // Make sure the w points to the right file
+	if fname := log["file"].LogWriter.(*FileLogWriter).file.Name(); fname != logVar+"-test" {
+		t.Errorf("XMLConfig: Expected file to have opened %s, found %s", logVar+"-test", fname)
+	}
+}
+
+func TestEscapeExpandEnvironmentVariables(t *testing.T) {
+        const (
+		configfile = "example.xml"
+		logVar = "variable"
+	)
+
+        os.Setenv("log.location", logVar)
+
+	fd, err := os.Create(configfile)
+	if err != nil {
+		t.Fatalf("Could not open %s for writing: %s", configfile, err)
+	}
+
+	fmt.Fprintln(fd, "<logging>")
+	fmt.Fprintln(fd, "  <filter enabled=\"true\">")
+	fmt.Fprintln(fd, "    <tag>file</tag>")
+	fmt.Fprintln(fd, "    <type>file</type>")
+	fmt.Fprintln(fd, "    <level>FINEST</level>")
+	fmt.Fprintln(fd, "    <property name=\"filename\">\\$log.location-test</property>")
+	fmt.Fprintln(fd, "  </filter>")
+	fmt.Fprintln(fd, "</logging>")
+	fd.Close()
+
+	log := make(Logger)
+	log.LoadConfiguration(configfile)
+	defer os.Remove("$log.location-test")
+	defer log.Close()
+
+	// Make sure we got all loggers
+	if len(log) != 1 {
+		t.Fatalf("XMLConfig: Expected 1 filters, found %d", len(log))
+	}
+	if _, ok := log["file"]; !ok {
+		t.Fatalf("XMLConfig: Expected file logger")
+	}
+
+        // Make sure the w points to the right file
+	if fname := log["file"].LogWriter.(*FileLogWriter).file.Name(); fname != "$log.location-test" {
+		t.Errorf("XMLConfig: Expected file to have opened %s, found %s", logVar+"-test", fname)
+	}
+}
+
+func TestMultipleExpansions (t *testing.T) {
+	valString := "${a}xhj${bc}${def}dkwk"
+	os.Setenv("a", "1")
+	os.Setenv("bc", "2")
+	os.Setenv("def", "345")
+	replaced := substituteEnv(valString)
+	if replaced != "1xhj2345dkwk" {
+		t.Errorf("Variable expansion: Expected %q, but got %q", "1xhj2345dkwk", replaced)
+	}
+}
+
+func TestEscapedExpansions (t *testing.T) {
+	valString := "${a}xhj\\${bc}${def}dkwk"
+	os.Setenv("a", "1")
+	os.Setenv("bc", "2")
+	os.Setenv("def", "345")
+	replaced := substituteEnv(valString)
+	if replaced != "1xhj${bc}345dkwk" {
+		t.Errorf("Variable expansion: Expected %q, but got %q", "1xhj${bc}345dkwk", replaced)
+	}
+}
+
+func TestEscapedBackspace (t *testing.T) {
+	valString := "${a}xhj\\\\${bc}${def}dkwk"
+	os.Setenv("a", "1")
+	os.Setenv("bc", "2")
+	os.Setenv("def", "345")
+	replaced := substituteEnv(valString)
+	if replaced != "1xhj\\2345dkwk" {
+		t.Errorf("Variable expansion: Expected %q, but got %q", "1xhj\\2345dkwk", replaced)
+	}
+}
+
 func BenchmarkFormatLogRecord(b *testing.B) {
 	const updateEvery = 1
 	rec := &LogRecord{
