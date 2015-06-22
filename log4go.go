@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"time"
 	"strings"
+	"sync"
 	"runtime"
 )
 
@@ -130,32 +131,41 @@ type Filter struct {
 
 // A Logger represents a collection of Filters through which log messages are
 // written.
-type Logger map[string]*Filter
+type Logger struct {
+	mutex   *sync.RWMutex
+	filters map[string]*Filter
+}
 
 // Create a new logger.
-//
-// DEPRECATED: Use make(Logger) instead.
-func NewLogger() Logger {
-	os.Stderr.WriteString("warning: use of deprecated NewLogger\n")
-	return make(Logger)
+func NewLogger() *Logger {
+	return &Logger{
+		mutex:   &sync.RWMutex{},
+		filters: make(map[string]*Filter),
+	}
 }
 
 // Create a new logger with a "stdout" filter configured to send log messages at
 // or above lvl to standard output.
 //
 // DEPRECATED: use NewDefaultLogger instead.
-func NewConsoleLogger(lvl level) Logger {
+func NewConsoleLogger(lvl level) *Logger {
 	os.Stderr.WriteString("warning: use of deprecated NewConsoleLogger\n")
-	return Logger{
-		"stdout": &Filter{lvl, NewConsoleLogWriter()},
+	return &Logger{
+		mutex: &sync.RWMutex{},
+		filters: map[string]*Filter{
+			"stdout": &Filter{lvl, NewConsoleLogWriter()},
+		},
 	}
 }
 
 // Create a new logger with a "stdout" filter configured to send log messages at
 // or above lvl to standard output.
-func NewDefaultLogger(lvl level) Logger {
-	return Logger{
-		"stdout": &Filter{lvl, NewConsoleLogWriter()},
+func NewDefaultLogger(lvl level) *Logger {
+	return &Logger{
+		mutex: &sync.RWMutex{},
+		filters: map[string]*Filter{
+			"stdout": &Filter{lvl, NewConsoleLogWriter()},
+		},
 	}
 }
 
@@ -163,29 +173,34 @@ func NewDefaultLogger(lvl level) Logger {
 // reconfiguration of logging.  Calling this is not really imperative, unless
 // you want to guarantee that all log messages are written.  Close removes
 // all filters (and thus all LogWriters) from the logger.
-func (log Logger) Close() {
+func (log *Logger) Close() {
+	log.mutex.Lock()
 	// Close all open loggers
-	for name, filt := range log {
+	for name, filt := range log.filters {
 		filt.Close()
-		delete(log, name)
+		delete(log.filters, name)
 	}
+	log.mutex.Unlock()
 }
 
 // Add a new LogWriter to the Logger which will only log messages at lvl or
 // higher.  This function should not be called from multiple goroutines.
 // Returns the logger for chaining.
-func (log Logger) AddFilter(name string, lvl level, writer LogWriter) Logger {
-	log[name] = &Filter{lvl, writer}
-	return log
+func (log *Logger) AddFilter(name string, lvl level, writer LogWriter) {
+	log.mutex.Lock()
+	log.filters[name] = &Filter{lvl, writer}
+	log.mutex.Unlock()
 }
 
 /******* Logging *******/
 // Send a formatted log message internally
-func (log Logger) intLogf(lvl level, format string, args ...interface{}) {
+func (log *Logger) intLogf(lvl level, format string, args ...interface{}) {
+	log.mutex.RLock()
+	defer log.mutex.RUnlock()
 	skip := true
 
 	// Determine if any logging will be done
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl >= filt.Level {
 			skip = false
 			break
@@ -216,7 +231,7 @@ func (log Logger) intLogf(lvl level, format string, args ...interface{}) {
 	}
 
 	// Dispatch the logs
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl < filt.Level {
 			continue
 		}
@@ -226,10 +241,12 @@ func (log Logger) intLogf(lvl level, format string, args ...interface{}) {
 
 // Send a closure log message internally
 func (log Logger) intLogc(lvl level, closure func() string) {
+	log.mutex.RLock()
+	defer log.mutex.RUnlock()
 	skip := true
 
 	// Determine if any logging will be done
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl >= filt.Level {
 			skip = false
 			break
@@ -255,7 +272,7 @@ func (log Logger) intLogc(lvl level, closure func() string) {
 	}
 
 	// Dispatch the logs
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl < filt.Level {
 			continue
 		}
@@ -265,10 +282,12 @@ func (log Logger) intLogc(lvl level, closure func() string) {
 
 // Send a log message with manual level, source, and message.
 func (log Logger) Log(lvl level, source, message string) {
+	log.mutex.RLock()
+	defer log.mutex.RUnlock()
 	skip := true
 
 	// Determine if any logging will be done
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl >= filt.Level {
 			skip = false
 			break
@@ -287,7 +306,7 @@ func (log Logger) Log(lvl level, source, message string) {
 	}
 
 	// Dispatch the logs
-	for _, filt := range log {
+	for _, filt := range log.filters {
 		if lvl < filt.Level {
 			continue
 		}

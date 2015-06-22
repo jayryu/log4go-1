@@ -132,7 +132,7 @@ func (log Logger) LoadConfiguration(filename string) {
 			continue
 		}
 
-		log[xmlfilt.Tag] = &Filter{lvl, filt}
+		log.filters[xmlfilt.Tag] = &Filter{lvl, filt}
 	}
 }
 
