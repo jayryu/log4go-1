@@ -57,6 +57,7 @@ var formatTests = []struct {
 		Formats: map[string]string{
 			// TODO(kevlar): How can I do this so it'll work outside of PST?
 			FORMAT_DEFAULT: "[2009/02/13 23:31:30 UTC] [EROR] (source) message\n",
+			FORMAT_MILLIS:  "[2009/02/13 23:31:30.123] [EROR] (source) message\n",
 			FORMAT_SHORT:   "[23:31 02/13/09] [EROR] message\n",
 			FORMAT_ABBREV:  "[EROR] message\n",
 		},

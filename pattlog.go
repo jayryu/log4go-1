@@ -10,19 +10,31 @@ import (
 
 const (
 	FORMAT_DEFAULT = "[%D %T] [%L] (%S) %M"
+	FORMAT_MILLIS  = "[%D %A] [%L] (%S) %M"
 	FORMAT_SHORT   = "[%t %d] [%L] %M"
 	FORMAT_ABBREV  = "[%L] %M"
 )
 
-type formatCacheType struct {
-	LastUpdateSeconds    int64
-	shortTime, shortDate string
-	longTime, longDate   string
-}
+var dateFormatCache = &struct {
+	// Date when the cached value was recomputed
+	lastYear, lastMonth, lastDay int
+	longDate, shortDate string
+} {}
 
-var formatCache = &formatCacheType{}
+var timeFormatCache = &struct {
+	// Second since the epoch when the cached value was recomputed
+	lastSecond int64
+	longTime, shortTime string
+} {}
+
+var millisFormatCache = &struct {
+	// Millisecond since the epoch when the cached value was recomputed
+	lastMillis int64
+	millisTime string
+} {}
 
 // Known format codes:
+// %A - Time w/ milliseconds (15:04:05.000)
 // %T - Time (15:04:05 MST)
 // %t - Time (15:04)
 // %D - Date (2006/01/02)
@@ -41,22 +53,34 @@ func FormatLogRecord(format string, rec *LogRecord) string {
 	}
 
 	out := bytes.NewBuffer(make([]byte, 0, 64))
-	secs := rec.Created.UnixNano() / 1e9
+	millis := rec.Created.UnixNano() / 1e6
+	seconds := millis / 1000
+	hour, minute, second := rec.Created.Hour(), rec.Created.Minute(), rec.Created.Second()
 
-	cache := *formatCache
-	if cache.LastUpdateSeconds != secs {
-		month, day, year := rec.Created.Month(), rec.Created.Day(), rec.Created.Year()
-		hour, minute, second := rec.Created.Hour(), rec.Created.Minute(), rec.Created.Second()
+	// Check if we need to recompute the millisecond cache
+	if millisFormatCache.lastMillis != millis {
+		nano := rec.Created.Nanosecond()
+		millisString := fmt.Sprintf("%02d:%02d:%02d.%03d", hour, minute, second, nano / 1e6)
+		millisFormatCache.lastMillis = millis
+		millisFormatCache.millisTime = millisString
+	}
+
+	// Check if we need to recompute the second cache 
+	if timeFormatCache.lastSecond != seconds {
 		zone, _ := rec.Created.Zone()
-		updated := &formatCacheType{
-			LastUpdateSeconds: secs,
-			shortTime:         fmt.Sprintf("%02d:%02d", hour, minute),
-			shortDate:         fmt.Sprintf("%02d/%02d/%02d", month, day, year%100),
-			longTime:          fmt.Sprintf("%02d:%02d:%02d %s", hour, minute, second, zone),
-			longDate:          fmt.Sprintf("%04d/%02d/%02d", year, month, day),
-		}
-		cache = *updated
-		formatCache = updated
+		timeFormatCache.lastSecond = seconds
+		timeFormatCache.longTime = fmt.Sprintf("%02d:%02d:%02d %s", hour, minute, second, zone)
+		timeFormatCache.shortTime = fmt.Sprintf("%02d:%02d", hour, minute)
+	}
+
+	// Check if we need to recompute the date cache
+	month, day, year := rec.Created.Month(), rec.Created.Day(), rec.Created.Year()
+	if dateFormatCache.lastDay != day || dateFormatCache.lastMonth != int(month) || dateFormatCache.lastYear != year {
+		dateFormatCache.lastDay = day
+		dateFormatCache.lastMonth = int(month)
+		dateFormatCache.lastYear = year
+		dateFormatCache.shortDate = fmt.Sprintf("%02d/%02d/%02d", month, day, year%100)
+		dateFormatCache.longDate = fmt.Sprintf("%04d/%02d/%02d", year, month, day)
 	}
 
 	// Split the string into pieces by % signs
@@ -66,14 +90,16 @@ func FormatLogRecord(format string, rec *LogRecord) string {
 	for i, piece := range pieces {
 		if i > 0 && len(piece) > 0 {
 			switch piece[0] {
+			case 'A':
+				out.WriteString(millisFormatCache.millisTime)
 			case 'T':
-				out.WriteString(cache.longTime)
+				out.WriteString(timeFormatCache.longTime)
 			case 't':
-				out.WriteString(cache.shortTime)
+				out.WriteString(timeFormatCache.shortTime)
 			case 'D':
-				out.WriteString(cache.longDate)
+				out.WriteString(dateFormatCache.longDate)
 			case 'd':
-				out.WriteString(cache.shortDate)
+				out.WriteString(dateFormatCache.shortDate)
 			case 'L':
 				out.WriteString(levelStrings[rec.Level])
 			case 'S':
