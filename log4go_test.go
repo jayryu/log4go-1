@@ -125,7 +125,7 @@ func TestFileLogWriter(t *testing.T) {
 	}(LogBufferLength)
 	LogBufferLength = 0
 
-	w := NewFileLogWriter(testLogFile, false)
+	w := NewFileLogWriter(testLogFile, false, intSuffix)
 	if w == nil {
 		t.Fatalf("Invalid return: w should not be nil")
 	}
@@ -142,13 +142,156 @@ func TestFileLogWriter(t *testing.T) {
 	}
 }
 
+/* When the date changes, the file should be rolled to
+   a timestamped file with yesterday's date in the name */
+func TestFileLogWriterUseDateName(t *testing.T) {
+	w := NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+	defer os.Remove(testLogFile)
+	// Write a message at the current time and yield to ensure it gets flushed
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
+	runtime.Gosched()
+
+	// Set the time to tomorrow and write a new message
+	today := time.Now()
+	w.now = func() time.Time { return today.Add(24 * time.Hour) }
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message2"))
+	w.Close()
+	runtime.Gosched()
+
+	// Check that the file was rolled with the correct date in the filename
+	expectedFile := fmt.Sprintf("%s.%4d-%02d-%02d", w.filename, today.Year(), today.Month(), today.Day())
+	_, err := os.Lstat(expectedFile)
+	if err != nil { t.Fatal(err) }
+	defer os.Remove(expectedFile)
+	runtime.Gosched()
+
+	// The new file should have 51 bytes
+	if contents, err := ioutil.ReadFile(testLogFile); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 51 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+
+	// The rolled file should have 50 bytes
+	if contents, err := ioutil.ReadFile(expectedFile); err != nil {
+		t.Errorf("read(%q): %s", expectedFile, err)
+	} else if len(contents) != 50 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
+/* When the app is restarted on the same day, the existing log file
+   should be appended to */
+func TestFileLogWriterAppendExisting(t *testing.T) {
+	w := NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+	defer os.Remove(testLogFile)
+
+	// Write a message and close the log
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
+	w.Close()
+	runtime.Gosched()
+
+	// Open a new log with the same config
+	w = NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+
+	// Write a second message and close the log
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message2"))
+	w.Close()
+	runtime.Gosched()
+
+	// Confirm that both messages are in the same log file
+	if contents, err := ioutil.ReadFile(testLogFile); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 101 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
+/* If two files exist for the same date, they should both be retained, with sequential suffixes */
+func TestFileLogWriterSameDate(t *testing.T) {
+	w := NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+	defer os.Remove(testLogFile)
+
+	// Write a message and close the log
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
+	w.Close()
+	runtime.Gosched()
+
+	// Set the file modified time to yesterday
+	yesterday := time.Now().Add(-24 * time.Hour)
+	err := os.Chtimes(testLogFile, yesterday, yesterday)
+	if err != nil { t.Fatal(err) }
+
+	// Open a second log with the same config
+	w = NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+
+	// Write a second message and close the log
+	w.LogWrite(newLogRecord(CRITICAL, "source", "message2"))
+	w.Close()
+	runtime.Gosched()
+
+	// Set the file modified time to yesterday for the second file
+	err = os.Chtimes(testLogFile, yesterday, yesterday)
+	if err != nil { t.Fatal(err) }
+
+	// Open a third log with the same config. At this point there's 
+	// an existing log from yesterday and a new log that was modified
+	// yesterday
+	w = NewFileLogWriter(testLogFile, false, dateSuffix)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.daily = true
+	w.Close()
+	runtime.Gosched()
+
+	expectedPath1 := fmt.Sprintf("%s.%4d-%02d-%02d", w.filename, yesterday.Year(), yesterday.Month(), yesterday.Day())
+	expectedPath2 := fmt.Sprintf("%s.%4d-%02d-%02d.%03d", w.filename, yesterday.Year(), yesterday.Month(), yesterday.Day(), 1)
+	defer os.Remove(expectedPath1)
+	defer os.Remove(expectedPath2)
+
+	// Confirm that the first file was renamed correctly
+	if contents, err := ioutil.ReadFile(expectedPath1); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 50 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+
+	// Confirm that the second file was renamed correctly (the same date, but with a numerical suffix)
+	if contents, err := ioutil.ReadFile(expectedPath2); err != nil {
+		t.Errorf("read(%q): %s", testLogFile, err)
+	} else if len(contents) != 51 {
+		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
 func TestXMLLogWriter(t *testing.T) {
 	defer func(buflen int) {
 		LogBufferLength = buflen
 	}(LogBufferLength)
 	LogBufferLength = 0
 
-	w := NewXMLLogWriter(testLogFile, false)
+	w := NewXMLLogWriter(testLogFile, false, intSuffix)
 	if w == nil {
 		t.Fatalf("Invalid return: w should not be nil")
 	}
@@ -233,7 +376,7 @@ func TestLogOutput(t *testing.T) {
 	l := make(Logger)
 
 	// Delete and open the output log without a timestamp (for a constant md5sum)
-	l.AddFilter("file", FINEST, NewFileLogWriter(testLogFile, false).SetFormat("[%L] %M"))
+	l.AddFilter("file", FINEST, NewFileLogWriter(testLogFile, false, intSuffix).SetFormat("[%L] %M"))
 	defer os.Remove(testLogFile)
 
 	// Send some log messages
@@ -632,7 +775,7 @@ func BenchmarkConsoleUtilNotLog(b *testing.B) {
 func BenchmarkFileLog(b *testing.B) {
 	sl := make(Logger)
 	b.StopTimer()
-	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false))
+	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false, intSuffix))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		sl.Log(WARNING, "here", "This is a log message")
@@ -644,7 +787,7 @@ func BenchmarkFileLog(b *testing.B) {
 func BenchmarkFileNotLogged(b *testing.B) {
 	sl := make(Logger)
 	b.StopTimer()
-	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false))
+	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false, intSuffix))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		sl.Log(DEBUG, "here", "This is a log message")
@@ -656,7 +799,7 @@ func BenchmarkFileNotLogged(b *testing.B) {
 func BenchmarkFileUtilLog(b *testing.B) {
 	sl := make(Logger)
 	b.StopTimer()
-	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false))
+	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false, intSuffix))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		sl.Info("%s is a log message", "This")
@@ -668,7 +811,7 @@ func BenchmarkFileUtilLog(b *testing.B) {
 func BenchmarkFileUtilNotLog(b *testing.B) {
 	sl := make(Logger)
 	b.StopTimer()
-	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false))
+	sl.AddFilter("file", INFO, NewFileLogWriter("benchlog.log", false, intSuffix))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		sl.Debug("%s is a log message", "This")

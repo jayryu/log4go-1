@@ -226,6 +226,18 @@ func strToNumSuffix(str string, mult int) int {
 	parsed, _ := strconv.Atoi(str)
 	return parsed * num
 }
+
+func parseRotateSuffix(value string) rotateSuffix {
+	switch value {
+	case "integer":
+		return intSuffix
+	case "date":
+		return dateSuffix
+	default:
+		return invalidSuffix
+	}
+}
+
 func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*FileLogWriter, bool) {
 	file := ""
 	format := "[%D %T] [%L] (%S) %M"
@@ -233,6 +245,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	maxsize := 0
 	daily := false
 	rotate := false
+	filenameSuffix := intSuffix
 
 	// Parse properties
 	for _, prop := range props {
@@ -249,6 +262,8 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 			daily = strings.Trim(prop.Value, " \r\n") != "false"
 		case "rotate":
 			rotate = strings.Trim(prop.Value, " \r\n") != "false"
+		case "rotateSuffix":
+			filenameSuffix = parseRotateSuffix(strings.Trim(prop.Value, " \r\n"))
 		default:
 			fmt.Fprintf(os.Stderr, "LoadConfiguration: Warning: Unknown property \"%s\" for file filter in %s\n", prop.Name, filename)
 		}
@@ -265,7 +280,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 		return nil, true
 	}
 
-	flw := NewFileLogWriter(file, rotate)
+	flw := NewFileLogWriter(file, rotate, filenameSuffix)
 	if flw == nil {
 		return nil, false
         }
@@ -282,6 +297,7 @@ func xmlToXMLLogWriter(filename string, props []xmlProperty, enabled bool) (*Fil
 	maxsize := 0
 	daily := false
 	rotate := false
+	filenameSuffix := intSuffix
 
 	// Parse properties
 	for _, prop := range props {
@@ -296,6 +312,8 @@ func xmlToXMLLogWriter(filename string, props []xmlProperty, enabled bool) (*Fil
 			daily = strings.Trim(prop.Value, " \r\n") != "false"
 		case "rotate":
 			rotate = strings.Trim(prop.Value, " \r\n") != "false"
+		case "rotateSuffix":
+			filenameSuffix = parseRotateSuffix(strings.Trim(prop.Value, " \r\n"))
 		default:
 			fmt.Fprintf(os.Stderr, "LoadConfiguration: Warning: Unknown property \"%s\" for xml filter in %s\n", prop.Name, filename)
 		}
@@ -312,7 +330,7 @@ func xmlToXMLLogWriter(filename string, props []xmlProperty, enabled bool) (*Fil
 		return nil, true
 	}
 
-	xlw := NewXMLLogWriter(file, rotate)
+	xlw := NewXMLLogWriter(file, rotate, filenameSuffix)
 	if xlw == nil {
 		return nil, false
 	}
