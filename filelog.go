@@ -106,7 +106,10 @@ func NewFileLogWriter(fname string, rotate bool, suffix rotateSuffix) *FileLogWr
 	go func() {
 		defer func() {
 			if w.file != nil {
-				fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: w.now()}))
+				// Don't write a trailer for dated files until they're rolled
+				if w.filenameSuffix != dateSuffix {
+					fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: w.now()}))
+				}
 				w.file.Close()
 			}
 		}()
@@ -114,7 +117,7 @@ func NewFileLogWriter(fname string, rotate bool, suffix rotateSuffix) *FileLogWr
 		for {
 			select {
 			case <-w.rot:
-				if err := w.intRotate(); err != nil {
+				if err := w.handleRotate(); err != nil {
 					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 					return
 				}
@@ -164,6 +167,7 @@ func (w *FileLogWriter) handleRotate() error {
 
 	// Close any log file that may be open
 	if w.file != nil {
+		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
 		w.file.Close()
 		startup = false
 	}
@@ -183,6 +187,8 @@ func (w *FileLogWriter) handleRotate() error {
 func (w *FileLogWriter) dateRotate(startup bool) error {
 	now := w.now()
 	stat, err := os.Lstat(w.filename)
+
+	// There's an existing file at the configured path
 	if err == nil {
 		var logYear, logDay int
 		var logMonth time.Month
@@ -205,6 +211,14 @@ func (w *FileLogWriter) dateRotate(startup bool) error {
 				w.maxsize_cursize = int(stat.Size())
 				return nil
 			}
+
+			// If the existing file needs to be rolled (based on the modified time), write the trailer
+			file, err := os.OpenFile(w.filename, os.O_WRONLY|os.O_APPEND, 0660)
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
+			file.Close()
 		}  else {
 			// If we're rolling the log, use the day it was opened as the last timestamp
 			logYear, logMonth, logDay = w.daily_opendate.Date()
