@@ -6,8 +6,41 @@ import (
 	"os"
 	"fmt"
 	"time"
-	"path"
+	"path/filepath"
 )
+
+// Time format
+const (
+	SuffixDateFormat = "2006-01-02"
+)
+
+// Helper date comparison
+func dateEqual(first time.Time, second time.Time) bool {
+	firstYear, firstMonth, firstDay := first.Date()
+	secondYear, secondMonth, secondDay := second.Date()
+	if firstYear == secondYear && firstMonth == secondMonth && firstDay == secondDay {
+		return true
+	}
+	return false
+}
+
+// Create directory and check basic permissions
+func makeDirectory(filename string) error {
+	// Create directory if doesn't exist
+	logDir := filepath.Dir(filename)
+	if err := os.MkdirAll(logDir, os.ModeDir | os.ModePerm); err != nil {
+		return err
+	}
+
+	// Ensure we at least have permissions to stat the directory.
+	// This could fail, for example, when we don't have permissions
+	// to read the parent directory
+	if _, err := os.Stat(logDir); os.IsPermission(err) {
+		return err
+	}
+
+	return nil
+}
 
 // This log writer sends output to a file
 type FileLogWriter struct {
@@ -37,8 +70,11 @@ type FileLogWriter struct {
 	daily          bool
 	daily_opendate int
 
-	// Keep old logfiles (.001, .002, etc)
+	// Keep old logfiles
 	rotate bool
+
+	// Use date-based rotation
+	rotateDateSuffix bool
 }
 
 // This is the FileLogWriter's output method
@@ -68,20 +104,20 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		filename: fname,
 		format:   "[%D %T] [%L] (%S) %M",
 		rotate:   rotate,
+		rotateDateSuffix: false,
 	}
 
-	// If the directory doesn't exist, attempt to create it
-	logDir := path.Dir(fname)
-	err := os.MkdirAll(logDir, os.ModeDir | os.ModePerm)	
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-		return nil
-	}
-
-	// open the file for the first time
-	if err := w.intRotate(); err != nil {
-		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-		return nil
+	// open the file for the first time, rotating only if necessary
+	if fileInfo, fileInfoErr := os.Lstat(w.filename); fileInfoErr == nil && !dateEqual(fileInfo.ModTime(), time.Now()) {
+		if err := w.handleRotate(fileInfo.ModTime()); err != nil {
+			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+			return nil
+		}
+	} else {
+		if err := w.openLogFile(); err != nil {
+			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+			return nil
+		}
 	}
 
 	go func() {
@@ -95,7 +131,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		for {
 			select {
 			case <-w.rot:
-				if err := w.intRotate(); err != nil {
+				if err := w.handleRotate(time.Now()); err != nil {
 					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 					return
 				}
@@ -106,9 +142,14 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				}
 				now := time.Now()
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
-					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
-					(w.daily && now.Day() != w.daily_opendate) {
-					if err := w.intRotate(); err != nil {
+					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) {
+					if err := w.handleRotate(now); err != nil {
+						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+						return
+					}
+				} else if w.daily && now.Day() != w.daily_opendate {
+					// Since we crossed the time boundary, back the date up by one day
+					if err := w.handleRotate(now.Add(-1 * 24 * time.Hour)); err != nil {
 						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 						return
 					}
@@ -136,28 +177,58 @@ func (w *FileLogWriter) Rotate() {
 	w.rot <- true
 }
 
-// If this is called in a threaded context, it MUST be synchronized
-func (w *FileLogWriter) intRotate() error {
-	// Close any log file that may be open
-	if w.file != nil {
-		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
-		w.file.Close()
+// Generate the next filename for rotation using integer suffix
+func (w *FileLogWriter) nextIntegerFilename(filename string) (string, error) {
+	for i := 1; i <= 999; i++ {
+		fullName := filename + fmt.Sprintf(".%03d", i)
+		if _, err := os.Lstat(fullName); os.IsNotExist(err) {
+			return fullName, nil
+		}
 	}
 
-	// If we are keeping log files, move it to the next available number
+	return "", fmt.Errorf("Rotate: Cannot find free log number to rename %s\n", filename)
+}
+
+// Generate the next filename for rotation using date suffix
+func (w *FileLogWriter) nextDateFilename(filename string, suffix string) (string, error) {
+        // Attempt filename.suffix
+	fullName := fmt.Sprintf("%s.%s", filename, suffix)
+	if _, err := os.Stat(fullName); os.IsNotExist(err) {
+		// File does not exist, return it as the next filename
+		return fullName, nil
+	}
+
+	// If necessary, add integer suffix
+	var lastErr error
+	var lastFullname string
+	for i := 1; i < 10000; i++ {
+		fullNameWithSuffix := fmt.Sprintf("%s.%s.%04d", filename, suffix, i)
+		if _, err := os.Stat(fullNameWithSuffix); os.IsNotExist(err) {
+			return fullNameWithSuffix, nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	return "", fmt.Errorf("Cannot rotate %s to %s: %v\n", filename, lastFullname, lastErr)
+}
+
+// If this is called in a threaded context, it MUST be synchronized
+func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
+	// If we are keeping log files, move it to the correct date
 	if w.rotate {
 		_, err := os.Lstat(w.filename)
 		if err == nil { // file exists
-			// Find the next available number
-			num := 1
 			fname := ""
-			for ; err == nil && num <= 999; num++ {
-				fname = w.filename + fmt.Sprintf(".%03d", num)
-				_, err = os.Lstat(fname)
+			var nextFilenameErr error
+			if w.rotateDateSuffix {
+				dateSuffix := rotateTime.Format(SuffixDateFormat)
+				fname, nextFilenameErr = w.nextDateFilename(w.filename, dateSuffix)
+			} else {
+				fname, nextFilenameErr = w.nextIntegerFilename(w.filename)
 			}
-			// return error if the last file checked still existed
-			if err == nil {
-				return fmt.Errorf("Rotate: Cannot find free log number to rename %s\n", w.filename)
+			if nextFilenameErr != nil {
+				return nextFilenameErr
 			}
 
 			// Rename the file to its newfound home
@@ -168,10 +239,24 @@ func (w *FileLogWriter) intRotate() error {
 		}
 	}
 
+	return w.openLogFile()
+}
+
+func (w *FileLogWriter) openLogFile() error {
+	if err := makeDirectory(w.filename); err != nil {
+		return err
+	}
+
 	// Open the log file
 	fd, err := os.OpenFile(w.filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0660)
 	if err != nil {
 		return err
+	}
+
+	// Close any log file that may be open
+	if w.file != nil {
+		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
+		w.file.Close()
 	}
 	w.file = fd
 
@@ -237,6 +322,13 @@ func (w *FileLogWriter) SetRotateDaily(daily bool) *FileLogWriter {
 func (w *FileLogWriter) SetRotate(rotate bool) *FileLogWriter {
 	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotate: %v\n", rotate)
 	w.rotate = rotate
+	return w
+}
+
+// SetRotateDateSuffix uses date rotation (.YYYY-MM-DD) instead of
+// integer-based rotation (.001, .002, etc) (chainable)
+func (w *FileLogWriter) SetRotateDateSuffix(dateSuffix bool) *FileLogWriter {
+	w.rotateDateSuffix = dateSuffix
 	return w
 }
 

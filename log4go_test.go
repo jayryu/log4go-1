@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -139,6 +140,46 @@ func TestFileLogWriter(t *testing.T) {
 		t.Errorf("read(%q): %s", testLogFile, err)
 	} else if len(contents) != 50 {
 		t.Errorf("malformed filelog: %q (%d bytes)", string(contents), len(contents))
+	}
+}
+
+func TestFileLogRotation(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	rotations := 5
+
+	w := NewFileLogWriter(testLogFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+
+	for i := 0; i < rotations; i++ {
+		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
+		runtime.Gosched()
+
+		rotateErr := w.handleRotate(time.Now().Add(-1 * 24 * time.Hour))
+		if rotateErr != nil {
+			t.Fatalf("Error occurred on rotation: %s", rotateErr.Error())
+		}
+	}
+
+	// Write to current logfile once to make the ordering clear
+	w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", rotations)))
+	w.Close()
+
+	// Delete rotated files
+	os.Remove(testLogFile)
+	files, _ := filepath.Glob(testLogFile + ".*")
+	for _, file := range files {
+		os.Remove(file)
+	}
+
+	// Ensure we deleted the expected number of rotations
+	if len(files) != rotations {
+		t.Fatalf("Incorrect number of file rotations occurred: Expected %d, got %d", rotations, len(files))
 	}
 }
 
