@@ -3,6 +3,7 @@
 package log4go
 
 import (
+	"io"
 	"os"
 	"fmt"
 	"time"
@@ -52,6 +53,9 @@ type FileLogWriter struct {
 	filename string
 	file     *os.File
 
+	// The error channel
+	errorWriter io.Writer
+
 	// The logging format
 	format string
 
@@ -75,6 +79,10 @@ type FileLogWriter struct {
 
 	// Use date-based rotation
 	rotateDateSuffix bool
+
+	// Failure counters
+	rotationFailures uint64
+	writeFailures uint64
 }
 
 // This is the FileLogWriter's output method
@@ -85,6 +93,50 @@ func (w *FileLogWriter) LogWrite(rec *LogRecord) {
 func (w *FileLogWriter) Close() {
 	close(w.rec)
 	<- w.completed
+}
+
+// Track write failures and prints to stderr when possible. If err is nil, we'll try to clear the failures
+func (w *FileLogWriter) handleWriteFailure(err error) {
+	// Try to note any previous failures
+	if w.writeFailures != 0 {
+		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Dropped %d previous log message(s)\n", w.filename, w.writeFailures)
+		if fprintfErr != nil {
+			// If we can't print now, exit early and try later
+			if err != nil { w.writeFailures += 1 }
+			return
+		} else {
+			w.writeFailures = 0
+		}
+	}
+	// If we have a current failure, attempt to print it
+	if err != nil {
+		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Write failed: %v\n", w.filename, err)
+		if fprintfErr != nil {
+			w.writeFailures += 1
+		}
+	}
+}
+
+// Track rotation failures and prints to stderr when possible. If err is nil, we'll try to clear the failures
+func (w *FileLogWriter) handleRotationFailure(err error) {
+	// Try to note any previous failures
+	if w.rotationFailures != 0 {
+		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %d previous rotation failures occurred\n", w.filename, w.rotationFailures)
+		if fprintfErr != nil {
+			// If we can't print now, exit early and try later
+			if err != nil { w.rotationFailures += 1 }
+			return
+		} else {
+			w.rotationFailures = 0
+		}
+	}
+	// If we have a current failure, attempt to print it
+	if err != nil {
+		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Rotation failed: %v\n", w.filename, err)
+		if fprintfErr != nil {
+			w.rotationFailures += 1
+		}
+	}
 }
 
 // NewFileLogWriter creates a new LogWriter which writes to the given file and
@@ -105,6 +157,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		format:   "[%D %T] [%L] (%S) %M",
 		rotate:   rotate,
 		rotateDateSuffix: false,
+		errorWriter: os.Stderr,
 	}
 
 	// open the file for the first time, rotating only if necessary
@@ -115,7 +168,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		}
 	} else {
 		if err := w.openLogFile(); err != nil {
-			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+			fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %s\n", w.filename, err)
 			return nil
 		}
 	}
@@ -131,10 +184,8 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		for {
 			select {
 			case <-w.rot:
-				if err := w.handleRotate(time.Now()); err != nil {
-					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-					return
-				}
+				err := w.handleRotate(time.Now())
+				w.handleRotationFailure(err)
 			case rec, ok := <-w.rec:
 				if !ok {
 					close(w.completed)
@@ -143,24 +194,17 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				now := time.Now()
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
 					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) {
-					if err := w.handleRotate(now); err != nil {
-						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-						return
-					}
+					err := w.handleRotate(now)
+					w.handleRotationFailure(err)
 				} else if w.daily && now.Day() != w.daily_opendate {
 					// Since we crossed the time boundary, back the date up by one day
-					if err := w.handleRotate(now.Add(-1 * 24 * time.Hour)); err != nil {
-						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-						return
-					}
+					err := w.handleRotate(now.Add(-1 * 24 * time.Hour))
+					w.handleRotationFailure(err)
 				}
 
 				// Perform the write
 				n, err := fmt.Fprint(w.file, FormatLogRecord(w.format, rec))
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-					return
-				}
+				w.handleWriteFailure(err)
 
 				// Update the counts
 				w.maxlines_curlines++
@@ -294,7 +338,7 @@ func (w *FileLogWriter) SetHeadFoot(head, foot string) *FileLogWriter {
 // Set rotate at linecount (chainable). Must be called before the first log
 // message is written.
 func (w *FileLogWriter) SetRotateLines(maxlines int) *FileLogWriter {
-	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotateLines: %v\n", maxlines)
+	//fmt.Fprintf(w.errorWriter, "FileLogWriter.SetRotateLines: %v\n", maxlines)
 	w.maxlines = maxlines
 	return w
 }
@@ -302,7 +346,7 @@ func (w *FileLogWriter) SetRotateLines(maxlines int) *FileLogWriter {
 // Set rotate at size (chainable). Must be called before the first log message
 // is written.
 func (w *FileLogWriter) SetRotateSize(maxsize int) *FileLogWriter {
-	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotateSize: %v\n", maxsize)
+	//fmt.Fprintf(w.errorWriter, "FileLogWriter.SetRotateSize: %v\n", maxsize)
 	w.maxsize = maxsize
 	return w
 }
@@ -310,7 +354,7 @@ func (w *FileLogWriter) SetRotateSize(maxsize int) *FileLogWriter {
 // Set rotate daily (chainable). Must be called before the first log message is
 // written.
 func (w *FileLogWriter) SetRotateDaily(daily bool) *FileLogWriter {
-	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotateDaily: %v\n", daily)
+	//fmt.Fprintf(w.errorWriter, "FileLogWriter.SetRotateDaily: %v\n", daily)
 	w.daily = daily
 	return w
 }
@@ -320,7 +364,7 @@ func (w *FileLogWriter) SetRotateDaily(daily bool) *FileLogWriter {
 // files are overwritten; otherwise, they are rotated to another file before the
 // new log is opened.
 func (w *FileLogWriter) SetRotate(rotate bool) *FileLogWriter {
-	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotate: %v\n", rotate)
+	//fmt.Fprintf(w.errorWriter, "FileLogWriter.SetRotate: %v\n", rotate)
 	w.rotate = rotate
 	return w
 }

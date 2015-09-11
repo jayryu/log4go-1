@@ -3,6 +3,7 @@
 package log4go
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -181,6 +182,137 @@ func TestFileLogRotation(t *testing.T) {
 	if len(files) != rotations {
 		t.Fatalf("Incorrect number of file rotations occurred: Expected %d, got %d", rotations, len(files))
 	}
+}
+
+func TestFileLogRotationUnderFailureConditions(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	testLogDir, dirErr := ioutil.TempDir("/tmp", "_log4go")
+	if dirErr != nil { t.Fatalf("Couldn't create temp directory: %v", dirErr) }
+	defer os.RemoveAll(testLogDir)
+	currentFile := filepath.Join(testLogDir, testLogFile)
+
+	w := NewFileLogWriter(currentFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+
+	w.LogWrite(newLogRecord(CRITICAL, "source", "foo"))
+	w.LogWrite(newLogRecord(CRITICAL, "source", "bar"))
+	runtime.Gosched()
+
+	// Remove log directory
+	os.RemoveAll(testLogDir)
+
+	// Force rotation
+	w.Rotate()
+	runtime.Gosched()
+
+	// Logging should continue at "current" file
+	w.LogWrite(newLogRecord(CRITICAL, "source", "baz"))
+	if _, statErr := os.Stat(currentFile); statErr != nil {
+		t.Fatalf("Couldn't stat logfile: %v", statErr)
+	}
+
+	// Save old permissions
+	var oldMode os.FileMode
+	if fileInfo, statErr := os.Stat(currentFile); statErr != nil {
+		t.Fatalf("Couldn't stat current logfile: %v", statErr)
+	} else {
+		oldMode = fileInfo.Mode()
+	}
+
+	// Make it impossible to read/write file
+	if err := os.Chmod(currentFile, 0000); err != nil {
+		t.Fatalf("Couldn't reduce permissions: %v", err)
+	}
+
+	// Force file handle closure
+	w.file.Close()
+
+	// Log message, will be discarded, library will not crash
+	w.LogWrite(newLogRecord(CRITICAL, "source", "this will be dropped"))
+	runtime.Gosched()
+
+	// Restore previous permissions
+	if err := os.Chmod(currentFile, oldMode); err != nil {
+		t.Fatalf("Couldn't restore permissions: %v", err)
+	}
+
+	// Reopen log file to restore operation
+	if err := w.openLogFile(); err != nil {
+		t.Fatalf("Unable to reopen log: %v", err)
+	}
+
+	// Log message, will not be dropped
+	w.LogWrite(newLogRecord(CRITICAL, "source", "this will be saved"))
+	runtime.Gosched()
+	w.Close()
+
+	// Make it impossible to read/write file
+	if err := os.Chmod(currentFile, 0000); err != nil {
+		t.Fatalf("Couldn't reduce permissions: %v", err)
+	}
+
+	// Try to open new logger
+	w2 := NewFileLogWriter(currentFile, true)
+	if w2 != nil {
+		t.Fatalf("New logger creation should fail on permissions")
+	}
+}
+
+func TestFileLogFailureReporting(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	testLogDir, dirErr := ioutil.TempDir("/tmp", "_log4go")
+	if dirErr != nil { t.Fatalf("Couldn't create temp directory: %v", dirErr) }
+	defer os.RemoveAll(testLogDir)
+	currentFile := filepath.Join(testLogDir, testLogFile)
+
+	w := NewFileLogWriter(currentFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+
+	// Make it impossible to report errors
+	w.errorWriter = w.file
+
+	// Force file handle closure
+	w.file.Close()
+
+	// Drop a message
+	w.LogWrite(newLogRecord(CRITICAL, "source", "foo"))
+	runtime.Gosched()
+
+	// Restore operation
+	b := make([]byte, 0)
+	errBuffer := bytes.NewBuffer(b)
+	w.errorWriter = errBuffer
+	if err := w.openLogFile(); err != nil {
+		t.Fatalf("Unable to reopen log: %v", err)
+	}
+
+	w.LogWrite(newLogRecord(CRITICAL, "source", "bar"))
+	runtime.Gosched()
+	if len(errBuffer.Bytes()) == 0 { // avoid flakey test if the record isn't yet written
+		runtime.Gosched()
+	}
+
+	if !bytes.Contains(errBuffer.Bytes(), []byte("Dropped 1 previous log message(s)")) {
+		t.Fatalf("Incorrect error message: %v", errBuffer.String())
+	}
+
+	if bytes.Count(errBuffer.Bytes(), []byte("\n")) != 1 {
+		t.Fatalf("Incorrect number of error messages")
+	}
+
+	w.Close()
 }
 
 func TestXMLLogWriter(t *testing.T) {
