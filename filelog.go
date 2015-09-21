@@ -83,6 +83,9 @@ type FileLogWriter struct {
 	// Failure counters
 	rotationFailures uint64
 	writeFailures uint64
+
+	// Whether we've fully started, that is, received our first log message
+	started bool
 }
 
 // This is the FileLogWriter's output method
@@ -139,6 +142,18 @@ func (w *FileLogWriter) handleRotationFailure(err error) {
 	}
 }
 
+// This is called on first log write
+func (w *FileLogWriter) handleStartupRotation() error {
+	// open the file for the first time, rotating only if necessary
+	if fileInfo, fileInfoErr := os.Lstat(w.filename); fileInfoErr == nil && !dateEqual(fileInfo.ModTime(), time.Now()) {
+		if err := w.handleRotate(fileInfo.ModTime()); err != nil {
+			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+			return err
+		}
+	}
+	return nil
+}
+
 // NewFileLogWriter creates a new LogWriter which writes to the given file and
 // has rotation enabled if rotate is true.
 //
@@ -158,19 +173,13 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		rotate:   rotate,
 		rotateDateSuffix: false,
 		errorWriter: os.Stderr,
+		started: false,
 	}
 
-	// open the file for the first time, rotating only if necessary
-	if fileInfo, fileInfoErr := os.Lstat(w.filename); fileInfoErr == nil && !dateEqual(fileInfo.ModTime(), time.Now()) {
-		if err := w.handleRotate(fileInfo.ModTime()); err != nil {
-			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-			return nil
-		}
-	} else {
-		if err := w.openLogFile(); err != nil {
-			fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %s\n", w.filename, err)
-			return nil
-		}
+	// Open the file initially; startup rotation is handled on first log message
+	if err := w.openLogFile(); err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %s\n", w.filename, err)
+		return nil
 	}
 
 	go func() {
@@ -182,6 +191,11 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		}()
 
 		for {
+			if w.started == false {
+				err := w.handleStartupRotation()
+				w.handleRotationFailure(err)
+				w.started = true
+			}
 			select {
 			case <-w.rot:
 				err := w.handleRotate(time.Now())
