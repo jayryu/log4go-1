@@ -156,6 +156,7 @@ func TestFileLogRotation(t *testing.T) {
 	if w == nil {
 		t.Fatalf("Invalid return: w should not be nil")
 	}
+	w.SetRotateOnStartup(false)
 
 	for i := 0; i < rotations; i++ {
 		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
@@ -280,6 +281,12 @@ func TestFileLogFailureReporting(t *testing.T) {
 		t.Fatalf("Invalid return: w should not be nil")
 	}
 
+	// Write a message to open the file so we can close it
+	w.LogWrite(newLogRecord(CRITICAL, "source", "foo"))
+	for i := 0; w.maxlines_curlines == 0 || i == 1000; i++ { // flakey test avoidance
+		runtime.Gosched()
+	}
+
 	// Make it impossible to report errors
 	w.errorWriter = w.file
 
@@ -288,7 +295,9 @@ func TestFileLogFailureReporting(t *testing.T) {
 
 	// Drop a message
 	w.LogWrite(newLogRecord(CRITICAL, "source", "foo"))
-	runtime.Gosched()
+	for i := 0; w.maxlines_curlines == 1 || i == 1000; i++ {
+		runtime.Gosched()
+	}
 
 	// Restore operation
 	b := make([]byte, 0)
@@ -300,7 +309,7 @@ func TestFileLogFailureReporting(t *testing.T) {
 
 	w.LogWrite(newLogRecord(CRITICAL, "source", "bar"))
 	runtime.Gosched()
-	if len(errBuffer.Bytes()) == 0 { // avoid flakey test if the record isn't yet written
+	for i := 0; w.maxlines_curlines == 0 || i == 1000; i++ {
 		runtime.Gosched()
 	}
 
@@ -329,7 +338,9 @@ func TestXMLLogWriter(t *testing.T) {
 
 	w.LogWrite(newLogRecord(CRITICAL, "source", "message"))
 	w.Close()
-	runtime.Gosched()
+	for i := 0; w.maxlines_curlines == 0 || i == 1000; i++ {
+		runtime.Gosched()
+	}
 
 	if contents, err := ioutil.ReadFile(testLogFile); err != nil {
 		t.Errorf("read(%q): %s", testLogFile, err)

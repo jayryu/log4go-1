@@ -233,6 +233,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	maxsize := 0
 	daily := false
 	rotate := false
+	rotateOnStartup := true
 	dateSuffix := false
 
 	// Parse properties
@@ -252,6 +253,8 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 			rotate = strings.Trim(prop.Value, " \r\n") != "false"
 		case "datesuffix":
 			dateSuffix = strings.Trim(prop.Value, " \r\n") != "false"
+		case "rotateonstartup":
+			rotateOnStartup = strings.Trim(prop.Value, " \r\n") != "false"
 		default:
 			fmt.Fprintf(os.Stderr, "LoadConfiguration: Warning: Unknown property \"%s\" for file filter in %s\n", prop.Name, filename)
 		}
@@ -277,6 +280,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	flw.SetRotateSize(maxsize)
 	flw.SetRotateDaily(daily)
 	flw.SetRotateDateSuffix(dateSuffix)
+	flw.SetRotateOnStartup(rotateOnStartup)
 	return flw, true
 }
 

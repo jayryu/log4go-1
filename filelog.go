@@ -80,6 +80,10 @@ type FileLogWriter struct {
 	// Use date-based rotation
 	rotateDateSuffix bool
 
+	// Rotate on startup
+	rotateOnStartup bool
+	currentFileExistedAtStartup bool
+
 	// Failure counters
 	rotationFailures uint64
 	writeFailures uint64
@@ -144,11 +148,19 @@ func (w *FileLogWriter) handleRotationFailure(err error) {
 
 // This is called on first log write
 func (w *FileLogWriter) handleStartupRotation() error {
+	// Skip rotation if the current file didn't exist at startup
+	if w.currentFileExistedAtStartup == false {
+		return nil
+	}
+
 	// open the file for the first time, rotating only if necessary
-	if fileInfo, fileInfoErr := os.Lstat(w.filename); fileInfoErr == nil && !dateEqual(fileInfo.ModTime(), time.Now()) {
-		if err := w.handleRotate(fileInfo.ModTime()); err != nil {
-			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-			return err
+	fileInfo, fileInfoErr := os.Lstat(w.filename)
+	if fileInfoErr == nil {
+		if !dateEqual(fileInfo.ModTime(), time.Now()) || w.rotateOnStartup {
+			if err := w.handleRotate(fileInfo.ModTime()); err != nil {
+				fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %s\n", w.filename, err)
+				return err
+			}
 		}
 	}
 	return nil
@@ -172,8 +184,16 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		format:   "[%D %T] [%L] (%S) %M",
 		rotate:   rotate,
 		rotateDateSuffix: false,
+		rotateOnStartup: true,
+		currentFileExistedAtStartup: true,
 		errorWriter: os.Stderr,
 		started: false,
+	}
+
+	// If the current file doesn't exist, we should short-circuit handleStartupRotation,
+	// or we will rotate twice
+	if _, err := os.Lstat(w.filename); os.IsNotExist(err) {
+		w.currentFileExistedAtStartup = false
 	}
 
 	// Open the file initially; startup rotation is handled on first log message
@@ -387,6 +407,15 @@ func (w *FileLogWriter) SetRotate(rotate bool) *FileLogWriter {
 // integer-based rotation (.001, .002, etc) (chainable)
 func (w *FileLogWriter) SetRotateDateSuffix(dateSuffix bool) *FileLogWriter {
 	w.rotateDateSuffix = dateSuffix
+	return w
+}
+
+// SetRotateOnStartup determines wheter to rotate the logfile on startup.
+// When true, rotate the logfile at every startup. When false, rotate the
+// logfile only when the date of the existing logfile is different than the
+// current date
+func (w *FileLogWriter) SetRotateOnStartup(rotateOnStartup bool) *FileLogWriter {
+	w.rotateOnStartup = rotateOnStartup
 	return w
 }
 
