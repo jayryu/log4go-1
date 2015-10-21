@@ -309,6 +309,8 @@ func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
 				return nextFilenameErr
 			}
 
+			w.closeLogFile()
+
 			// Rename the file to its newfound home
 			err = os.Rename(w.filename, fname)
 			if err != nil {
@@ -318,6 +320,15 @@ func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
 	}
 
 	return w.openLogFile()
+}
+
+func (w *FileLogWriter) closeLogFile() {
+	// Close any log file that may be open
+	if w.file != nil {
+		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
+		w.file.Close()
+		w.file = nil
+	}
 }
 
 func (w *FileLogWriter) openLogFile() error {
@@ -331,11 +342,7 @@ func (w *FileLogWriter) openLogFile() error {
 		return err
 	}
 
-	// Close any log file that may be open
-	if w.file != nil {
-		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
-		w.file.Close()
-	}
+	w.closeLogFile()
 	w.file = fd
 
 	now := time.Now()
