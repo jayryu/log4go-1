@@ -54,7 +54,7 @@ func (log Logger) LoadConfiguration(filename string) {
 
 	for _, xmlfilt := range xc.Filter {
 		var filt LogWriter
-		var lvl level
+		var lvl Level
 		bad, good, enabled := false, true, false
 
 		// Check required children
