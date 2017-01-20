@@ -3,11 +3,11 @@
 package log4go
 
 import (
+	"fmt"
 	"io"
 	"os"
-	"fmt"
-	"time"
 	"path/filepath"
+	"time"
 )
 
 // Time format
@@ -29,7 +29,7 @@ func dateEqual(first time.Time, second time.Time) bool {
 func makeDirectory(filename string) error {
 	// Create directory if doesn't exist
 	logDir := filepath.Dir(filename)
-	if err := os.MkdirAll(logDir, os.ModeDir | os.ModePerm); err != nil {
+	if err := os.MkdirAll(logDir, os.ModeDir|os.ModePerm); err != nil {
 		return err
 	}
 
@@ -45,8 +45,8 @@ func makeDirectory(filename string) error {
 
 // This log writer sends output to a file
 type FileLogWriter struct {
-	rec chan *LogRecord
-	rot chan bool
+	rec       chan *LogRecord
+	rot       chan bool
 	completed chan int
 
 	// The opened file
@@ -81,12 +81,12 @@ type FileLogWriter struct {
 	rotateDateSuffix bool
 
 	// Rotate on startup
-	rotateOnStartup bool
+	rotateOnStartup             bool
 	currentFileExistedAtStartup bool
 
 	// Failure counters
 	rotationFailures uint64
-	writeFailures uint64
+	writeFailures    uint64
 
 	// Whether we've fully started, that is, received our first log message
 	started bool
@@ -99,7 +99,7 @@ func (w *FileLogWriter) LogWrite(rec *LogRecord) {
 
 func (w *FileLogWriter) Close() {
 	close(w.rec)
-	<- w.completed
+	<-w.completed
 }
 
 // Track write failures and prints to stderr when possible. If err is nil, we'll try to clear the failures
@@ -109,7 +109,9 @@ func (w *FileLogWriter) handleWriteFailure(err error) {
 		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Dropped %d previous log message(s)\n", w.filename, w.writeFailures)
 		if fprintfErr != nil {
 			// If we can't print now, exit early and try later
-			if err != nil { w.writeFailures += 1 }
+			if err != nil {
+				w.writeFailures += 1
+			}
 			return
 		} else {
 			w.writeFailures = 0
@@ -131,7 +133,9 @@ func (w *FileLogWriter) handleRotationFailure(err error) {
 		_, fprintfErr := fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): %d previous rotation failures occurred\n", w.filename, w.rotationFailures)
 		if fprintfErr != nil {
 			// If we can't print now, exit early and try later
-			if err != nil { w.rotationFailures += 1 }
+			if err != nil {
+				w.rotationFailures += 1
+			}
 			return
 		} else {
 			w.rotationFailures = 0
@@ -177,17 +181,17 @@ func (w *FileLogWriter) handleStartupRotation() error {
 //   [%D %T] [%L] (%S) %M
 func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	w := &FileLogWriter{
-		rec:      make(chan *LogRecord, LogBufferLength),
-		rot:      make(chan bool),
-		completed: make(chan int),
-		filename: fname,
-		format:   "[%D %T] [%L] (%S) %M",
-		rotate:   rotate,
-		rotateDateSuffix: false,
-		rotateOnStartup: true,
+		rec:                         make(chan *LogRecord, LogBufferLength),
+		rot:                         make(chan bool),
+		completed:                   make(chan int),
+		filename:                    fname,
+		format:                      "[%D %T] [%L] (%S) %M",
+		rotate:                      rotate,
+		rotateDateSuffix:            false,
+		rotateOnStartup:             true,
 		currentFileExistedAtStartup: true,
-		errorWriter: os.Stderr,
-		started: false,
+		errorWriter:                 os.Stderr,
+		started:                     false,
 	}
 
 	// If the current file doesn't exist, we should short-circuit handleStartupRotation,
@@ -269,7 +273,7 @@ func (w *FileLogWriter) nextIntegerFilename(filename string) (string, error) {
 
 // Generate the next filename for rotation using date suffix
 func (w *FileLogWriter) nextDateFilename(filename string, suffix string) (string, error) {
-        // Attempt filename.suffix
+	// Attempt filename.suffix
 	fullName := fmt.Sprintf("%s.%s", filename, suffix)
 	if _, err := os.Stat(fullName); os.IsNotExist(err) {
 		// File does not exist, return it as the next filename

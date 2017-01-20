@@ -98,7 +98,7 @@ var logRecordWriteTests = []struct {
 
 func TestConsoleLogWriter(t *testing.T) {
 	console := ConsoleLogWriterImp{
-		records: make(chan *LogRecord, LogBufferLength),
+		records:   make(chan *LogRecord, LogBufferLength),
 		completed: make(chan int),
 	}
 
@@ -192,7 +192,9 @@ func TestFileLogRotationUnderFailureConditions(t *testing.T) {
 	LogBufferLength = 0
 
 	testLogDir, dirErr := ioutil.TempDir("/tmp", "_log4go")
-	if dirErr != nil { t.Fatalf("Couldn't create temp directory: %v", dirErr) }
+	if dirErr != nil {
+		t.Fatalf("Couldn't create temp directory: %v", dirErr)
+	}
 	defer os.RemoveAll(testLogDir)
 	currentFile := filepath.Join(testLogDir, testLogFile)
 
@@ -272,7 +274,9 @@ func TestFileLogFailureReporting(t *testing.T) {
 	LogBufferLength = 0
 
 	testLogDir, dirErr := ioutil.TempDir("/tmp", "_log4go")
-	if dirErr != nil { t.Fatalf("Couldn't create temp directory: %v", dirErr) }
+	if dirErr != nil {
+		t.Fatalf("Couldn't create temp directory: %v", dirErr)
+	}
 	defer os.RemoveAll(testLogDir)
 	currentFile := filepath.Join(testLogDir, testLogFile)
 
@@ -607,12 +611,12 @@ func TestXMLConfig(t *testing.T) {
 }
 
 func TestExpandEnvironmentVariables(t *testing.T) {
-        const (
+	const (
 		configfile = "example.xml"
-		logVar = "variable"
+		logVar     = "variable"
 	)
 
-        os.Setenv("log.location", logVar)
+	os.Setenv("log.location", logVar)
 
 	fd, err := os.Create(configfile)
 	if err != nil {
@@ -631,7 +635,7 @@ func TestExpandEnvironmentVariables(t *testing.T) {
 
 	log := make(Logger)
 	log.LoadConfiguration(configfile)
-	defer os.Remove(logVar+"-test")
+	defer os.Remove(logVar + "-test")
 	defer log.Close()
 
 	// Make sure we got all loggers
@@ -642,19 +646,19 @@ func TestExpandEnvironmentVariables(t *testing.T) {
 		t.Fatalf("XMLConfig: Expected file logger")
 	}
 
-        // Make sure the w points to the right file
+	// Make sure the w points to the right file
 	if fname := log["file"].LogWriter.(*FileLogWriter).file.Name(); fname != logVar+"-test" {
 		t.Errorf("XMLConfig: Expected file to have opened %s, found %s", logVar+"-test", fname)
 	}
 }
 
 func TestEscapeExpandEnvironmentVariables(t *testing.T) {
-        const (
+	const (
 		configfile = "example.xml"
-		logVar = "variable"
+		logVar     = "variable"
 	)
 
-        os.Setenv("log.location", logVar)
+	os.Setenv("log.location", logVar)
 
 	fd, err := os.Create(configfile)
 	if err != nil {
@@ -684,7 +688,7 @@ func TestEscapeExpandEnvironmentVariables(t *testing.T) {
 		t.Fatalf("XMLConfig: Expected file logger")
 	}
 
-        // Make sure the w points to the right file
+	// Make sure the w points to the right file
 	if fname := log["file"].LogWriter.(*FileLogWriter).file.Name(); fname != "$log.location-test" {
 		t.Errorf("XMLConfig: Expected file to have opened %s, found %s", logVar+"-test", fname)
 	}
@@ -723,7 +727,7 @@ func TestXMLMissingDir(t *testing.T) {
 
 }
 
-func TestMultipleExpansions (t *testing.T) {
+func TestMultipleExpansions(t *testing.T) {
 	valString := "${a}xhj${bc}${def}dkwk"
 	os.Setenv("a", "1")
 	os.Setenv("bc", "2")
@@ -734,7 +738,7 @@ func TestMultipleExpansions (t *testing.T) {
 	}
 }
 
-func TestEscapedExpansions (t *testing.T) {
+func TestEscapedExpansions(t *testing.T) {
 	valString := "${a}xhj\\${bc}${def}dkwk"
 	os.Setenv("a", "1")
 	os.Setenv("bc", "2")
@@ -745,7 +749,7 @@ func TestEscapedExpansions (t *testing.T) {
 	}
 }
 
-func TestEscapedBackspace (t *testing.T) {
+func TestEscapedBackspace(t *testing.T) {
 	valString := "${a}xhj\\\\${bc}${def}dkwk"
 	os.Setenv("a", "1")
 	os.Setenv("bc", "2")

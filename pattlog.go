@@ -3,8 +3,8 @@
 package log4go
 
 import (
-	"fmt"
 	"bytes"
+	"fmt"
 	"io"
 )
 
@@ -18,20 +18,20 @@ const (
 var dateFormatCache = &struct {
 	// Date when the cached value was recomputed
 	lastYear, lastMonth, lastDay int
-	longDate, shortDate string
-} {}
+	longDate, shortDate          string
+}{}
 
 var timeFormatCache = &struct {
 	// Second since the epoch when the cached value was recomputed
-	lastSecond int64
+	lastSecond          int64
 	longTime, shortTime string
-} {}
+}{}
 
 var millisFormatCache = &struct {
 	// Millisecond since the epoch when the cached value was recomputed
 	lastMillis int64
 	millisTime string
-} {}
+}{}
 
 // Known format codes:
 // %A - Time w/ milliseconds (15:04:05.000)
@@ -60,12 +60,12 @@ func FormatLogRecord(format string, rec *LogRecord) string {
 	// Check if we need to recompute the millisecond cache
 	if millisFormatCache.lastMillis != millis {
 		nano := rec.Created.Nanosecond()
-		millisString := fmt.Sprintf("%02d:%02d:%02d.%03d", hour, minute, second, nano / 1e6)
+		millisString := fmt.Sprintf("%02d:%02d:%02d.%03d", hour, minute, second, nano/1e6)
 		millisFormatCache.lastMillis = millis
 		millisFormatCache.millisTime = millisString
 	}
 
-	// Check if we need to recompute the second cache 
+	// Check if we need to recompute the second cache
 	if timeFormatCache.lastSecond != seconds {
 		zone, _ := rec.Created.Zone()
 		timeFormatCache.lastSecond = seconds

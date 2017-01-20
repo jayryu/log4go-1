@@ -3,13 +3,13 @@
 package log4go
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
-	"bytes"
 )
 
 type xmlProperty struct {
@@ -104,7 +104,7 @@ func (log Logger) LoadConfiguration(filename string) {
 			os.Exit(1)
 		}
 
-                for i := range xmlfilt.Property {
+		for i := range xmlfilt.Property {
 			xmlfilt.Property[i].Value = substituteEnv(xmlfilt.Property[i].Value)
 		}
 
@@ -149,36 +149,36 @@ func substituteEnv(prop string) string {
 	lastOffset := 0
 	var propBuilder bytes.Buffer
 	state := 1
-        /* States:
+	/* States:
 	   0 - Previous character was `\`, the next character may be an escaped `$` or `\`
 	   1 - Initial state
 	   2 - Previous character was `$`, the next character may be `{`
 	   3 - Previous characters were `${`, continue until the next character is `}`
-        */
+	*/
 	for i := 0; i < len(prop); i++ {
 		switch {
 		case state == 0 && prop[i] == '$':
-			propBuilder.WriteString(prop[lastOffset:i-1])
+			propBuilder.WriteString(prop[lastOffset : i-1])
 			propBuilder.WriteString("$")
-			lastOffset = i+1
+			lastOffset = i + 1
 			state = 1
-                case state == 0 && prop[i] == '\\':
-			propBuilder.WriteString(prop[lastOffset:i-1])
+		case state == 0 && prop[i] == '\\':
+			propBuilder.WriteString(prop[lastOffset : i-1])
 			propBuilder.WriteString("\\")
-			lastOffset = i+1
+			lastOffset = i + 1
 			state = 1
 		case state == 1 && prop[i] == '$':
 			state = 2
 		case state == 1 && prop[i] == '\\':
 			state = 0
 		case state == 2 && prop[i] == '{':
-			vStart = i+1
+			vStart = i + 1
 			state = 3
 		case state == 3 && prop[i] == '}':
 			value := os.Getenv(prop[vStart:i])
-			propBuilder.WriteString(prop[lastOffset:vStart-2])
+			propBuilder.WriteString(prop[lastOffset : vStart-2])
 			propBuilder.WriteString(value)
-			lastOffset = i+1
+			lastOffset = i + 1
 			state = 1
 		case state != 3:
 			state = 1
@@ -274,7 +274,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	flw := NewFileLogWriter(file, rotate)
 	if flw == nil {
 		return nil, false
-        }
+	}
 	flw.SetFormat(format)
 	flw.SetRotateLines(maxlines)
 	flw.SetRotateSize(maxsize)

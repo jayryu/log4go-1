@@ -3,18 +3,18 @@
 package log4go
 
 import (
+	"fmt"
 	"io"
 	"os"
-	"fmt"
 )
 
 var stdout io.Writer = os.Stdout
 
 /* ConsoleLogWriter was previously a channel which would let you do things
-  like pass nil values instead. We chagned it to a struct so we could
-  dangle some extra attributes on it. So that we don't have to go rework
-  large swaths of the code base to uses pointers for ConsoleLogWriter we're
-  just going to add this interface so everything else "Just Works". */
+like pass nil values instead. We chagned it to a struct so we could
+dangle some extra attributes on it. So that we don't have to go rework
+large swaths of the code base to uses pointers for ConsoleLogWriter we're
+just going to add this interface so everything else "Just Works". */
 type ConsoleLogWriter interface {
 	run(out io.Writer)
 	LogWrite(rec *LogRecord)
@@ -23,14 +23,14 @@ type ConsoleLogWriter interface {
 
 // This is the standard writer that prints to standard output.
 type ConsoleLogWriterImp struct {
-	records chan *LogRecord
+	records   chan *LogRecord
 	completed chan int
 }
 
 // This creates a new ConsoleLogWriter
 func NewConsoleLogWriter() ConsoleLogWriter {
 	writer := ConsoleLogWriterImp{
-		records: make(chan *LogRecord, LogBufferLength),
+		records:   make(chan *LogRecord, LogBufferLength),
 		completed: make(chan int),
 	}
 	go writer.run(stdout)
@@ -47,7 +47,7 @@ func (w ConsoleLogWriterImp) run(out io.Writer) {
 		}
 		fmt.Fprint(out, "[", timestr, "] [", levelStrings[rec.Level], "] ", rec.Message, "\n")
 	}
-  close(w.completed)
+	close(w.completed)
 }
 
 // This is the ConsoleLogWriter's output method.  This will block if the output
@@ -60,5 +60,5 @@ func (w ConsoleLogWriterImp) LogWrite(rec *LogRecord) {
 // send log messages to this logger after a Close have undefined behavior.
 func (w ConsoleLogWriterImp) Close() {
 	close(w.records)
-	<- w.completed
+	<-w.completed
 }
