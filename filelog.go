@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sync"
 	"time"
 )
 
@@ -45,9 +47,11 @@ func makeDirectory(filename string) error {
 
 // This log writer sends output to a file
 type FileLogWriter struct {
-	rec       chan *LogRecord
-	rot       chan bool
-	completed chan int
+	rec             chan *LogRecord
+	rot             chan bool
+	completed       chan int
+	backgroundTasks chan string
+	wg              *sync.WaitGroup
 
 	// The opened file
 	filename string
@@ -84,6 +88,10 @@ type FileLogWriter struct {
 	rotateOnStartup             bool
 	currentFileExistedAtStartup bool
 
+	// Archive (age-off) options
+	filesToKeep    int
+	logfileMatcher *regexp.Regexp
+
 	// Failure counters
 	rotationFailures uint64
 	writeFailures    uint64
@@ -100,6 +108,8 @@ func (w *FileLogWriter) LogWrite(rec *LogRecord) {
 func (w *FileLogWriter) Close() {
 	close(w.rec)
 	<-w.completed
+	close(w.backgroundTasks)
+	w.wg.Wait()
 }
 
 // Track write failures and prints to stderr when possible. If err is nil, we'll try to clear the failures
@@ -183,6 +193,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	w := &FileLogWriter{
 		rec:                         make(chan *LogRecord, LogBufferLength),
 		rot:                         make(chan bool),
+		backgroundTasks:             make(chan string, 1),
 		completed:                   make(chan int),
 		filename:                    fname,
 		format:                      "[%D %T] [%L] (%S) %M",
@@ -192,7 +203,17 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		currentFileExistedAtStartup: true,
 		errorWriter:                 os.Stderr,
 		started:                     false,
+		filesToKeep:                 30,
+		wg:                          &sync.WaitGroup{},
 	}
+
+	// Compile the regex to match against files to archive
+	logfilePrefix := filepath.Base(w.filename)
+	logfileMatcher, err := regexp.Compile("^" + regexp.QuoteMeta(logfilePrefix) + FILELOG_ARCHIVE_REGEX)
+	if err != nil {
+		return nil
+	}
+	w.logfileMatcher = logfileMatcher
 
 	// If the current file doesn't exist, we should short-circuit handleStartupRotation,
 	// or we will rotate twice
@@ -206,7 +227,10 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		return nil
 	}
 
+	w.wg.Add(1)
 	go func() {
+		defer w.wg.Done()
+
 		defer func() {
 			if w.file != nil {
 				fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
@@ -251,7 +275,61 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		}
 	}()
 
+	// Background tasks goroutine
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+
+		for filename := range w.backgroundTasks {
+			if w.filesToKeep > 0 {
+				dir := filepath.Dir(filename)
+				err := w.archiveFiles(dir)
+				if err != nil {
+					fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't archive files: %s\n", filename, err)
+				}
+			}
+		}
+	}()
+
 	return w
+}
+
+func (w *FileLogWriter) archiveFiles(dir string) error {
+	filenames := make([]string, 0)
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if info == nil {
+			return nil
+		}
+
+		// Don't recurse into subdirectories
+		if info.IsDir() && path != "." {
+			return filepath.SkipDir
+		}
+
+		filename := filepath.Base(path)
+		if !w.logfileMatcher.MatchString(filename) {
+			// Not interested in this file
+			return nil
+		}
+
+		filenames = append(filenames, filename)
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Remove unwanted files
+	if len(filenames) > w.filesToKeep {
+		for _, filename := range filenames[0 : len(filenames)-w.filesToKeep] {
+			os.Remove(filepath.Join(dir, filename))
+		}
+	}
+
+	return nil
 }
 
 // Request that the logs rotate
@@ -297,17 +375,18 @@ func (w *FileLogWriter) nextDateFilename(filename string, suffix string) (string
 
 // If this is called in a threaded context, it MUST be synchronized
 func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
+	rotatedName := ""
+
 	// If we are keeping log files, move it to the correct date
 	if w.rotate {
 		_, err := os.Lstat(w.filename)
 		if err == nil { // file exists
-			fname := ""
 			var nextFilenameErr error
 			if w.rotateDateSuffix {
 				dateSuffix := rotateTime.Format(SuffixDateFormat)
-				fname, nextFilenameErr = w.nextDateFilename(w.filename, dateSuffix)
+				rotatedName, nextFilenameErr = w.nextDateFilename(w.filename, dateSuffix)
 			} else {
-				fname, nextFilenameErr = w.nextIntegerFilename(w.filename)
+				rotatedName, nextFilenameErr = w.nextIntegerFilename(w.filename)
 			}
 			if nextFilenameErr != nil {
 				return nextFilenameErr
@@ -316,11 +395,16 @@ func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
 			w.closeLogFile()
 
 			// Rename the file to its newfound home
-			err = os.Rename(w.filename, fname)
+			err = os.Rename(w.filename, rotatedName)
 			if err != nil {
 				return fmt.Errorf("Rotate: %s\n", err)
 			}
 		}
+	}
+
+	// If we're configured to archive files, signal the background goroutine
+	if w.filesToKeep > 0 {
+		w.backgroundTasks <- rotatedName
 	}
 
 	return w.openLogFile()
@@ -427,6 +511,13 @@ func (w *FileLogWriter) SetRotateDateSuffix(dateSuffix bool) *FileLogWriter {
 // current date
 func (w *FileLogWriter) SetRotateOnStartup(rotateOnStartup bool) *FileLogWriter {
 	w.rotateOnStartup = rotateOnStartup
+	return w
+}
+
+// SetMaxArchiveFiles determines the maximum number of kept log files before
+// age-off. To keep all log files, set to 0.
+func (w *FileLogWriter) SetMaxArchiveFiles(filesToKeep int) *FileLogWriter {
+	w.filesToKeep = filesToKeep
 	return w
 }
 
