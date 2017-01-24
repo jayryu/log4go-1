@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 )
@@ -295,37 +296,49 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 }
 
 func (w *FileLogWriter) archiveFiles(dir string) error {
-	filenames := make([]string, 0)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if info == nil {
-			return nil
-		}
-
-		// Don't recurse into subdirectories
-		if info.IsDir() && path != "." {
-			return filepath.SkipDir
-		}
-
-		filename := filepath.Base(path)
-		if !w.logfileMatcher.MatchString(filename) {
-			// Not interested in this file
-			return nil
-		}
-
-		filenames = append(filenames, filename)
-
-		return nil
-	})
-
+	// Get a handle to the directory
+	dirFile, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
 
+	dirInfo, err := dirFile.Stat()
+	if err != nil {
+		return err
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("%q must be a directory", dir)
+	}
+
+	var filesInDir []string
+	var matchedFiles []string
+
+	for {
+		filesInDir, err = dirFile.Readdirnames(1000)
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return err
+		}
+
+		for _, fullFilename := range filesInDir {
+			baseFilename := filepath.Base(fullFilename)
+			if !w.logfileMatcher.MatchString(baseFilename) {
+				// Not interested in this file
+				continue
+			}
+
+			matchedFiles = append(matchedFiles, fullFilename)
+		}
+	}
+
+	sort.Strings(matchedFiles)
+
 	// Remove unwanted files
-	if len(filenames) > w.filesToKeep {
-		for _, filename := range filenames[0 : len(filenames)-w.filesToKeep] {
-			os.Remove(filepath.Join(dir, filename))
+	if len(matchedFiles) > w.filesToKeep {
+		for _, filename := range matchedFiles[0 : len(matchedFiles)-w.filesToKeep] {
+			os.Remove(filename)
 		}
 	}
 

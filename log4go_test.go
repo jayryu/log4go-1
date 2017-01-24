@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -340,6 +342,7 @@ func TestFileWriterArchive(t *testing.T) {
 
 	rotations := 100
 	filesToKeep := 10
+	now := time.Now()
 
 	w := NewFileLogWriter(testLogFile, true)
 	if w == nil {
@@ -353,7 +356,7 @@ func TestFileWriterArchive(t *testing.T) {
 		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
 		runtime.Gosched()
 
-		rotateErr := w.handleRotate(time.Now().Add(time.Duration((rotations-i)*-1*24) * time.Hour))
+		rotateErr := w.handleRotate(now.Add(time.Duration((rotations-i)*-1*24) * time.Hour))
 		if rotateErr != nil {
 			t.Fatalf("Error occurred on rotation: %s", rotateErr.Error())
 		}
@@ -380,6 +383,16 @@ func TestFileWriterArchive(t *testing.T) {
 
 	if i != filesToKeep {
 		t.Fatalf("Expected %d files to be left after archival, found %d", filesToKeep, i)
+	}
+
+	// Ensure the correct files were kept
+	sort.Strings(files)
+	for j := 0; j < filesToKeep; j++ {
+		date := now.Add(time.Duration((filesToKeep-j)*-1*24) * time.Hour)
+		dateStr := fmt.Sprintf("%04d-%02d-%02d", date.Year(), date.Month(), date.Day())
+		if !strings.HasSuffix(files[j], dateStr) {
+			t.Fatalf("Expected filename %q to have suffix %q", files[j], dateStr)
+		}
 	}
 }
 
