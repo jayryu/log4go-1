@@ -333,6 +333,9 @@ func (w *FileLogWriter) archiveFiles(dir string) error {
 		}
 	}
 
+	// matchedFiles contains all the logfiles that matched the regexp.
+	// When sorted, we can find the oldest files because the suffixes are
+	// fixed width - .log.YYYY-MM-DD
 	sort.Strings(matchedFiles)
 
 	// Remove unwanted files
