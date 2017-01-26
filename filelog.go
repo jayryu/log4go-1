@@ -415,12 +415,12 @@ func (w *FileLogWriter) handleRotate(rotateTime time.Time) error {
 			if err != nil {
 				return fmt.Errorf("Rotate: %s\n", err)
 			}
-		}
-	}
 
-	// If we're configured to archive files, signal the background goroutine
-	if w.filesToKeep > 0 {
-		w.backgroundTasks <- rotatedName
+			// If we're configured to archive files, signal the background goroutine
+			if w.filesToKeep > 0 {
+				w.backgroundTasks <- rotatedName
+			}
+		}
 	}
 
 	return w.openLogFile()
