@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,6 +193,10 @@ func TestFileLogRotationUnderFailureConditions(t *testing.T) {
 	}(LogBufferLength)
 	LogBufferLength = 0
 
+	if runtime.GOOS == "windows" {
+		t.Skip()
+	}
+
 	testLogDir, dirErr := ioutil.TempDir("/tmp", "_log4go")
 	if dirErr != nil {
 		t.Fatalf("Couldn't create temp directory: %v", dirErr)
@@ -328,6 +334,168 @@ func TestFileLogFailureReporting(t *testing.T) {
 	w.Close()
 }
 
+func TestFileWriterArchive(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	rotations := 100
+	filesToKeep := 10
+	now := time.Now()
+
+	w := NewFileLogWriter(testLogFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.SetRotateOnStartup(false)
+	w.SetRotateDateSuffix(true)
+	w.SetMaxArchiveFiles(filesToKeep)
+
+	for i := 0; i < rotations; i++ {
+		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
+		runtime.Gosched()
+
+		rotateErr := w.handleRotate(now.Add(time.Duration((rotations-i)*-1*24) * time.Hour))
+		if rotateErr != nil {
+			t.Fatalf("Error occurred on rotation: %s", rotateErr.Error())
+		}
+	}
+
+	// Write to current logfile once to make the ordering clear
+	w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", rotations)))
+	w.Close()
+
+	// Delete rotated files
+	err := os.Remove(testLogFile)
+	if err != nil {
+		t.Fatalf("Expected %s to exist", testLogFile)
+	}
+	files, _ := filepath.Glob(testLogFile + ".*")
+	i := 0
+	for _, file := range files {
+		err = os.Remove(file)
+		if err != nil {
+			t.Fatalf("Expected %s to exist", file)
+		}
+		i++
+	}
+
+	if i != filesToKeep {
+		t.Fatalf("Expected %d files to be left after archival, found %d", filesToKeep, i)
+	}
+
+	// Ensure the correct files were kept
+	sort.Strings(files)
+	for j := 0; j < filesToKeep; j++ {
+		date := now.Add(time.Duration((filesToKeep-j)*-1*24) * time.Hour)
+		dateStr := fmt.Sprintf("%04d-%02d-%02d", date.Year(), date.Month(), date.Day())
+		if !strings.HasSuffix(files[j], dateStr) {
+			t.Fatalf("Expected filename %q to have suffix %q", files[j], dateStr)
+		}
+	}
+}
+
+func TestFileWriterArchiveFewerThanFilesToKeep(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	rotations := 5
+	filesToKeep := 10
+
+	w := NewFileLogWriter(testLogFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.SetRotateOnStartup(false)
+	w.SetRotateDateSuffix(true)
+	w.SetMaxArchiveFiles(filesToKeep)
+
+	for i := 0; i < rotations; i++ {
+		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
+		runtime.Gosched()
+
+		rotateErr := w.handleRotate(time.Now().Add(time.Duration((rotations-i)*-1*24) * time.Hour))
+		if rotateErr != nil {
+			t.Fatalf("Error occurred on rotation: %s", rotateErr.Error())
+		}
+	}
+
+	// Write to current logfile once to make the ordering clear
+	w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", rotations)))
+	w.Close()
+
+	// Delete rotated files
+	err := os.Remove(testLogFile)
+	if err != nil {
+		t.Fatalf("Expected %s to exist", testLogFile)
+	}
+	files, _ := filepath.Glob(testLogFile + ".*")
+	i := 0
+	for _, file := range files {
+		err = os.Remove(file)
+		if err != nil {
+			t.Fatalf("Expected %s to exist", file)
+		}
+		i++
+	}
+
+	if i != rotations {
+		t.Fatalf("Expected %d files to be left after archival, found %d", rotations, i)
+	}
+}
+
+func TestFileWriterArchivingDisabled(t *testing.T) {
+	defer func(buflen int) {
+		LogBufferLength = buflen
+	}(LogBufferLength)
+	LogBufferLength = 0
+
+	rotations := 100
+
+	w := NewFileLogWriter(testLogFile, true)
+	if w == nil {
+		t.Fatalf("Invalid return: w should not be nil")
+	}
+	w.SetRotateOnStartup(false)
+	w.SetRotateDateSuffix(true)
+	w.SetMaxArchiveFiles(0)
+
+	for i := 0; i < rotations; i++ {
+		w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", i)))
+		runtime.Gosched()
+
+		rotateErr := w.handleRotate(time.Now().Add(time.Duration((rotations-i)*-1*24) * time.Hour))
+		if rotateErr != nil {
+			t.Fatalf("Error occurred on rotation: %s", rotateErr.Error())
+		}
+	}
+
+	// Write to current logfile once to make the ordering clear
+	w.LogWrite(newLogRecord(CRITICAL, "source", fmt.Sprintf("msg %d", rotations)))
+	w.Close()
+
+	// Delete rotated files
+	err := os.Remove(testLogFile)
+	if err != nil {
+		t.Fatalf("Expected %s to exist", testLogFile)
+	}
+	files, _ := filepath.Glob(testLogFile + ".*")
+	i := 0
+	for _, file := range files {
+		err = os.Remove(file)
+		if err != nil {
+			t.Fatalf("Expected %s to exist", file)
+		}
+		i++
+	}
+
+	if i != rotations {
+		t.Fatalf("Expected %d files to be left after archival, found %d", rotations, i)
+	}
+}
 func TestXMLLogWriter(t *testing.T) {
 	defer func(buflen int) {
 		LogBufferLength = buflen
