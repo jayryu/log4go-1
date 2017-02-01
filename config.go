@@ -271,7 +271,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 		return nil, true
 	}
 
-	flw := NewFileLogWriter(file, rotate)
+	flw := NewFileLogWriter(file, rotate, false)
 	if flw == nil {
 		return nil, false
 	}

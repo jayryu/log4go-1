@@ -3,6 +3,8 @@
 package log4go
 
 import (
+	"archive/zip"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +18,17 @@ import (
 // Time format
 const (
 	SuffixDateFormat = "2006-01-02"
+)
+
+const (
+	FILELOG_ARCHIVE_REGEX = `\.[0-9]{4}-[0-9]{2}-[0-9]{2}(\.[0-9]{4})?(\.gz|\.zip)?$`
+)
+
+type CompressionMethod string
+
+const (
+	COMPRESSION_GZIP CompressionMethod = "gz"
+	COMPRESSION_ZIP  CompressionMethod = "zip"
 )
 
 // Helper date comparison
@@ -92,6 +105,10 @@ type FileLogWriter struct {
 	// Archive (age-off) options
 	filesToKeep    int
 	logfileMatcher *regexp.Regexp
+
+	// Compression
+	compress          bool
+	compressionMethod CompressionMethod
 
 	// Failure counters
 	rotationFailures uint64
@@ -190,7 +207,7 @@ func (w *FileLogWriter) handleStartupRotation() error {
 //
 // The standard log-line format is:
 //   [%D %T] [%L] (%S) %M
-func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
+func NewFileLogWriter(fname string, rotate bool, compress bool) *FileLogWriter {
 	w := &FileLogWriter{
 		rec:                         make(chan *LogRecord, LogBufferLength),
 		rot:                         make(chan bool),
@@ -202,6 +219,8 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		rotateDateSuffix:            false,
 		rotateOnStartup:             true,
 		currentFileExistedAtStartup: true,
+		compress:                    compress,
+		compressionMethod:           FILELOG_DEFAULT_COMPRESSION_METHOD,
 		errorWriter:                 os.Stderr,
 		started:                     false,
 		filesToKeep:                 30,
@@ -289,6 +308,18 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't archive files: %s\n", filename, err)
 				}
 			}
+
+			if w.compress {
+				compressedFilename := filename + "." + string(w.compressionMethod)
+				compressedInprogressFilename := compressedFilename + ".inprogress"
+
+				success := w.compressFile(filename, compressedInprogressFilename, w.compressionMethod)
+				if success {
+					w.moveCompressedFile(filename, compressedFilename, compressedInprogressFilename)
+				} else {
+					w.deleteInprogressFile(compressedInprogressFilename)
+				}
+			}
 		}
 	}()
 
@@ -346,6 +377,108 @@ func (w *FileLogWriter) archiveFiles(dir string) error {
 	}
 
 	return nil
+}
+
+// Compress a file after it has been rotated.
+// plainFile - name of the rotated, uncompressed file
+// compressedInprogressFilename - name of a temporary file to hold compressed data
+// method - type of compression to use
+func (w *FileLogWriter) compressFile(plainFilename, compressedInprogressFilename string, method CompressionMethod) bool {
+	plainFile, err := os.Open(plainFilename)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't open logfile %q to begin compression: %s\n", w.filename, plainFilename, err)
+		return false
+	}
+	defer plainFile.Close()
+
+	compressedFile, err := os.Create(compressedInprogressFilename)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't open new compressed file %q: %s\n", w.filename, compressedInprogressFilename, err)
+		return false
+	}
+
+	// Defer closing the underlying file
+	defer func() {
+		err = compressedFile.Close()
+		if err != nil {
+			fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't close file %q: %s\n", w.filename, compressedInprogressFilename, err)
+		}
+	}()
+
+	var compressedFileWriter io.Writer
+	switch method {
+	case "gz":
+		gzipWriter := gzip.NewWriter(compressedFile)
+
+		defer func() {
+			err = gzipWriter.Close()
+			if err != nil {
+				fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't close gzip writer on %q: %s\n", w.filename, compressedInprogressFilename, err)
+			}
+		}()
+		compressedFileWriter = gzipWriter
+	case "zip":
+		// zipWriter is the outer container, compressedFileWriter is an entry inside the zip
+		zipWriter := zip.NewWriter(compressedFile)
+
+		// Defer closing the zip writer
+		defer func() {
+			err = zipWriter.Close()
+			if err != nil {
+				fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't close zip writer on %q: %s\n", w.filename, compressedInprogressFilename, err)
+			}
+		}()
+
+		// compressedFileWriter, the zip file entry, doesn't have a Close() method
+		basename := filepath.Base(plainFilename)
+		compressedFileWriter, err = zipWriter.Create(basename)
+		if err != nil {
+			fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't open zip file entry: %s\n", w.filename, err)
+			return false
+		}
+	default:
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Unknown compression method: %q\n", w.filename, method)
+		return false
+	}
+
+	// Read plain file, write to compressed file
+	_, err = io.Copy(compressedFileWriter, plainFile)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't write compressed file %q: %s\n", w.filename, compressedInprogressFilename, err)
+		return false
+	}
+
+	return true
+}
+
+func (w *FileLogWriter) moveCompressedFile(plainFilename, compressedFilename, compressedInprogressFilename string) {
+	// Rename compressed file
+	err := os.Rename(compressedInprogressFilename, compressedFilename)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't rename file %q to %q: %s\n", w.filename, compressedInprogressFilename, compressedFilename, err)
+		return
+	}
+
+	// Delete plain file
+	err = os.Remove(plainFilename)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't remove file %q: %s\n", w.filename, plainFilename, err)
+
+		// If we can't remove the old plain file, delete the compressed file so we don't affect the
+		// retention of archived files
+		err = os.Remove(compressedFilename)
+		if err != nil {
+			fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't remove file %q: %s\n", w.filename, compressedFilename, err)
+		}
+		return
+	}
+}
+
+func (w *FileLogWriter) deleteInprogressFile(compressedInprogressFilename string) {
+	err := os.Remove(compressedInprogressFilename)
+	if err != nil {
+		fmt.Fprintf(w.errorWriter, "FileLogWriter(%q): Couldn't remove temporary file %q: %s\n", w.filename, compressedInprogressFilename, err)
+	}
 }
 
 // Request that the logs rotate
@@ -537,10 +670,17 @@ func (w *FileLogWriter) SetMaxArchiveFiles(filesToKeep int) *FileLogWriter {
 	return w
 }
 
+// SetCompressionMethod determines the type of compression to use. Valid options
+// are "gz" and "zip"
+func (w *FileLogWriter) SetCompressionMethod(compressionMethod CompressionMethod) *FileLogWriter {
+	w.compressionMethod = compressionMethod
+	return w
+}
+
 // NewXMLLogWriter is a utility method for creating a FileLogWriter set up to
 // output XML record log messages instead of line-based ones.
 func NewXMLLogWriter(fname string, rotate bool) *FileLogWriter {
-	return NewFileLogWriter(fname, rotate).SetFormat(
+	return NewFileLogWriter(fname, rotate, false).SetFormat(
 		`	<record level="%L">
 		<timestamp>%D %T</timestamp>
 		<source>%S</source>
